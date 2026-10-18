@@ -111,7 +111,7 @@
           <label class="f" for="vunit">Show speed as</label>
           <select id="vunit"><option value="rpm" selected>wheel RPM</option><option value="ms">m/s</option></select>
         </div>
-        <div><label class="f" for="wd">Wheel diameter (in)</label><input id="wd" type="number" value="4" step="0.25" min="0.1"></div>
+        <div><label class="f" for="wd">Wheel diameter (mm)</label><input id="wd" type="number" value="100" step="1" min="1"></div>
         <div><label class="f" for="eff" title="Ball exit speed ÷ wheel surface speed. ~1 for two wheels, ~0.5 for one wheel against a hood.">Efficiency (0–1)</label><input id="eff" type="number" value="1" step="0.05" min="0.05" max="1"></div>
       </div>
       <h3>Launch speed v₀ per shot <button id="autoAll" type="button">All → auto</button></h3>
@@ -161,7 +161,7 @@ function params() {
 }
 
 // Flywheel: ball speed = eff · π · D · RPM / 60  →  RPM = 60 · v / (eff · π · D)
-const toRPM = v => 60 * v / (parseFloat($("eff").value) * Math.PI * parseFloat($("wd").value) * 0.0254);
+const toRPM = v => 60 * v / (parseFloat($("eff").value) * Math.PI * parseFloat($("wd").value) / 1000);
 const showRPM = () => $("vunit").value === "rpm";
 const fmtV = v => !isFinite(v) ? "—" : showRPM() ? Math.round(toRPM(v)) + " RPM" : v.toFixed(2) + " m/s";
 const vLabel = () => showRPM() ? "RPM" : "m/s";
