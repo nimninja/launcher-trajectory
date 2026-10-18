@@ -54,7 +54,7 @@
   .shot .row1 .meta { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .shot .row2 { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
   .shot input[type=range] { flex: 1; min-width: 0; }
-  .shot .val { font-variant-numeric: tabular-nums; font-size: 13px; width: 70px; text-align: right; }
+  .shot .val { font-variant-numeric: tabular-nums; font-size: 13px; width: 78px; text-align: right; }
   .tag { font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px solid var(--border); color: var(--muted); }
   .tag.auto { color: var(--good); border-color: var(--good); }
   .tag.btn { cursor: pointer; }
@@ -107,6 +107,12 @@
         <div><label class="f" for="y0">Launch y₀ (m)</label><input id="y0" type="number" value="0.2" step="0.05"></div>
         <div><label class="f" for="yt">Goal y (m)</label><input id="yt" type="number" value="1.2" step="0.05"></div>
         <div><label class="f" for="g">g (m/s²)</label><input id="g" type="number" value="9.81" step="0.01"></div>
+        <div>
+          <label class="f" for="vunit">Show speed as</label>
+          <select id="vunit"><option value="rpm" selected>wheel RPM</option><option value="ms">m/s</option></select>
+        </div>
+        <div><label class="f" for="wd">Wheel diameter (in)</label><input id="wd" type="number" value="4" step="0.25" min="0.1"></div>
+        <div><label class="f" for="eff" title="Ball exit speed ÷ wheel surface speed. ~1 for two wheels, ~0.5 for one wheel against a hood.">Efficiency (0–1)</label><input id="eff" type="number" value="1" step="0.05" min="0.05" max="1"></div>
       </div>
       <h3>Launch speed v₀ per shot <button id="autoAll" type="button">All → auto</button></h3>
       <div id="shots"></div>
@@ -121,7 +127,7 @@
     <h2>Shots</h2>
     <div class="tablewrap"><table id="tbl"></table></div>
     <p class="note">"Auto" sets each shot's v₀ so the arc passes through the goal height at distance x:
-      v₀ = √( g·x² / (2·cos²θ·(y₀ + x·tan θ − y)) ). Drag a shot's slider to override it.
+      v₀ = √( g·x² / (2·cos²θ·(y₀ + x·tan θ − y)) ). Drag a shot's slider to override it. Wheel RPM = 60·v₀ / (efficiency·π·D).
       Left side is drawn at negative X, right at positive X; the goal sits at the origin.</p>
   </div>
 </main>
@@ -153,6 +159,13 @@ function params() {
     yt: parseFloat($("yt").value),
   };
 }
+
+// Flywheel: ball speed = eff · π · D · RPM / 60  →  RPM = 60 · v / (eff · π · D)
+const toRPM = v => 60 * v / (parseFloat($("eff").value) * Math.PI * parseFloat($("wd").value) * 0.0254);
+const showRPM = () => $("vunit").value === "rpm";
+const fmtV = v => !isFinite(v) ? "—" : showRPM() ? Math.round(toRPM(v)) + " RPM" : v.toFixed(2) + " m/s";
+const vLabel = () => showRPM() ? "RPM" : "m/s";
+const fmtVn = v => !isFinite(v) ? "—" : showRPM() ? String(Math.round(toRPM(v))) : v.toFixed(2);
 
 const height = (x, v0, p) => p.y0 + x * Math.tan(p.t) - p.g * x * x / (2 * v0 * v0 * Math.cos(p.t) ** 2);
 
@@ -211,7 +224,7 @@ function render() {
   rows.forEach(r => {
     const sl = $("v" + r.i);
     if (document.activeElement !== sl) sl.value = r.v;
-    $("vv" + r.i).textContent = r.v.toFixed(2) + " m/s";
+    $("vv" + r.i).textContent = fmtV(r.v);
     const tag = $("tag" + r.i);
     tag.className = "tag " + (r.auto ? "auto" : "btn");
     tag.textContent = r.auto ? (isFinite(r.vReq) ? "auto" : "unreachable") : "reset";
@@ -226,7 +239,7 @@ function render() {
       type: "scatter3d", mode: "lines", name: `Shot ${r.i + 1}`, legendgroup: "s" + r.i,
       x: r.pts.map(q => r.sx + ux * q.d), y: r.pts.map(q => r.by + uy * q.d), z: r.pts.map(q => q.y),
       line: { color: r.color, width: 6 },
-      hovertemplate: `Shot ${r.i + 1} · v₀ ${r.v.toFixed(2)} m/s<br>height %{z:.2f} m<extra></extra>`,
+      hovertemplate: `Shot ${r.i + 1} · v₀ ${fmtV(r.v)}<br>height %{z:.2f} m<extra></extra>`,
     });
     t3.push({
       type: "scatter3d", mode: "markers", showlegend: false, legendgroup: "s" + r.i,
@@ -269,19 +282,19 @@ function render() {
   // ---- table ----
   const tol = 0.05; // m
   $("tbl").innerHTML = `<tr><th class="l">Shot</th><th>Back</th><th>Side</th><th class="l">Dir</th><th class="l">Result</th>
-    <th>x (m)</th><th>θ (°)</th><th>From goal (°)</th><th>Auto v₀ (m/s)</th><th>Used v₀ (m/s)</th><th>Height at goal (m)</th></tr>` +
+    <th>x (m)</th><th>θ (°)</th><th>From goal (°)</th><th>Auto v₀ (${vLabel()})</th><th>Used v₀ (${vLabel()})</th><th>Height at goal (m)</th></tr>` +
     rows.map(r => {
       const dh = r.hAtGoal - p.yt;
       return `<tr><td><span class="dot" style="background:${r.color};margin-right:6px"></span>${r.i + 1}</td>
         <td>${r.back}</td><td>${r.side}</td><td class="l">${r.dir}</td><td class="l">${r.result} ${r.pct}%</td>
         <td>${fmt(r.x)}</td><td>${fmt(r.theta, 1)}</td><td>${fmt(90 - r.theta, 1)}</td>
-        <td>${isFinite(r.vReq) ? fmt(r.vReq) : "unreachable"}</td><td>${fmt(r.v)}</td>
+        <td>${isFinite(r.vReq) ? fmtVn(r.vReq) : "unreachable"}</td><td>${fmtVn(r.v)}</td>
         <td class="${Math.abs(dh) <= tol ? "hit" : "miss"}">${fmt(r.hAtGoal)} (${dh >= 0 ? "+" : ""}${fmt(dh)})</td></tr>`;
     }).join("");
 }
 
 buildShotControls();
-["units", "theta", "g", "y0", "yt"].forEach(id => $(id).addEventListener("input", render));
+["units", "theta", "g", "y0", "yt", "vunit", "wd", "eff"].forEach(id => $(id).addEventListener("input", render));
 $("autoAll").addEventListener("click", () => { override.fill(null); render(); });
 $("collapse").addEventListener("click", () => {
   const c = $("panel").classList.toggle("collapsed");
