@@ -111,7 +111,7 @@
           <label class="f" for="vunit">Show speed as</label>
           <select id="vunit"><option value="rpm" selected>wheel RPM</option><option value="ms">m/s</option></select>
         </div>
-        <div><label class="f" for="wd">Wheel diameter (mm)</label><input id="wd" type="number" value="100" step="1" min="1"></div>
+        <div><label class="f" for="wd">Wheel diameter (mm)</label><input id="wd" type="number" value="72" step="1" min="1"></div>
         <div><label class="f" for="eff" title="Ball exit speed ÷ wheel surface speed. ~1 for two wheels, ~0.5 for one wheel against a hood.">Efficiency (0–1)</label><input id="eff" type="number" value="1" step="0.05" min="0.05" max="1"></div>
       </div>
       <h3>Launch speed v₀ per shot <button id="autoAll" type="button">All → auto</button></h3>
@@ -128,7 +128,7 @@
     <div class="tablewrap"><table id="tbl"></table></div>
     <p class="note">"Auto" sets each shot's v₀ so the arc passes through the goal height at distance x:
       v₀ = √( g·x² / (2·cos²θ·(y₀ + x·tan θ − y)) ). Drag a shot's slider to override it. Wheel RPM = 60·v₀ / (efficiency·π·D).
-      Left side is drawn at negative X, right at positive X; the goal sits at the origin.</p>
+      Left side is drawn at negative X, right at positive X; the goal sits at the origin. The 3D target is an approximate FTC BIOBUZZ HIVE (red = yours, faded blue = the other alliance's), built from the competition manual's dimensions with the upward CELL's opening placed at the goal height.</p>
   </div>
 </main>
 
@@ -215,6 +215,62 @@ function buildShotControls() {
   });
 }
 
+// ---- FTC BIOBUZZ HIVE model (approximate, dimensions from the 2026-27 competition manual §9.6) ----
+// The upward CELL's opening is centered on the goal point (0, 0, goal height); shots come from +Y.
+const IN = 0.0254;
+const CELL = { w: 20 * IN, h: 14 * IN, d: 12 * IN };      // opening 20" wide × 14" tall, 12" deep
+const CELL_SPACING = 18.8 * IN;                            // between the two CELLS of a HIVE
+const FRAME = { w: 49.46 * IN, d: 38.95 * IN };            // A-frame base
+const ARM_DROP = 35 * Math.PI / 180;                       // how far the HIVE is tipped
+
+// Open-top box (a CELL): local x∈±w/2, y∈±h/2, z∈[-d, 0] with the opening at z = 0,
+// rotated by `tilt` about the X axis and moved so the opening's center sits at `at`.
+function cellMesh(at, tilt, color, opacity, name) {
+  const { w, h, d } = CELL, c = Math.cos(tilt), sn = Math.sin(tilt);
+  const V = [];
+  for (const zz of [-d, 0]) for (const yy of [-h / 2, h / 2]) for (const xx of [-w / 2, w / 2])
+    V.push([at[0] + xx, at[1] + yy * c - zz * sn, at[2] + yy * sn + zz * c]);
+  // vertex index = xi + 2·yi + 4·zi ; faces: bottom + 4 walls (no lid)
+  const quads = [[0, 1, 3, 2], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]];
+  const I = [], J = [], K = [];
+  quads.forEach(([a, b, cc, dd]) => { I.push(a, a); J.push(b, cc); K.push(cc, dd); });
+  const edges = [[0,1],[1,3],[3,2],[2,0],[4,5],[5,7],[7,6],[6,4],[0,4],[1,5],[2,6],[3,7]];
+  const ex = [], ey = [], ez = [];
+  edges.forEach(([a, b]) => { ex.push(V[a][0], V[b][0], null); ey.push(V[a][1], V[b][1], null); ez.push(V[a][2], V[b][2], null); });
+  return [
+    { type: "mesh3d", x: V.map(v => v[0]), y: V.map(v => v[1]), z: V.map(v => v[2]), i: I, j: J, k: K,
+      color, opacity, flatshading: true, name, showlegend: false, hoverinfo: "skip", legendgroup: "hive" },
+    { type: "scatter3d", mode: "lines", x: ex, y: ey, z: ez, line: { color, width: 3 },
+      showlegend: false, hoverinfo: "skip", legendgroup: "hive" },
+  ];
+}
+
+function hiveTraces(yt, frameColor) {
+  const out = [];
+  const addHive = (x0, color, opacity) => {
+    const up = [x0, 0, yt];                                      // upward CELL opening
+    const upCenter = [x0, 0, yt - CELL.d / 2];
+    const downCenter = [x0, -CELL_SPACING * Math.cos(ARM_DROP), upCenter[2] - CELL_SPACING * Math.sin(ARM_DROP)];
+    const tiltDown = Math.PI - ARM_DROP;                         // opening faces down and back
+    const down = [x0, downCenter[1] - Math.sin(tiltDown) * CELL.d / 2, downCenter[2] + Math.cos(tiltDown) * CELL.d / 2];
+    out.push(...cellMesh(up, 0, color, opacity, "HIVE"));
+    out.push(...cellMesh(down, tiltDown, color, opacity * 0.8, "HIVE"));
+    out.push({ type: "scatter3d", mode: "lines", x: [x0, x0], y: [upCenter[1], downCenter[1]], z: [upCenter[2], downCenter[2]],
+      line: { color: "#f2b705", width: 9 }, showlegend: false, hoverinfo: "skip", legendgroup: "hive" });
+    return [(upCenter[1] + downCenter[1]) / 2, (upCenter[2] + downCenter[2]) / 2]; // pivot (y, z)
+  };
+  const [py, pz] = addHive(0, "#e03131", 0.45);                  // your HIVE
+  addHive(CELL.w + 4 * IN, "#1c7ed6", 0.2);                      // the other alliance's HIVE
+  // A-frames: triangles in the Y-Z plane at each end of the crossbar, apex at the pivot
+  const fx0 = (CELL.w + 4 * IN) / 2 - FRAME.w / 2, fx1 = fx0 + FRAME.w;
+  const fx = [], fy = [], fz = [];
+  for (const x of [fx0, fx1]) fx.push(x, x, x, x, null), fy.push(py - FRAME.d / 2, py, py + FRAME.d / 2, py - FRAME.d / 2, null), fz.push(0, pz, 0, 0, null);
+  fx.push(fx0, fx1); fy.push(py, py); fz.push(pz, pz);           // crossbar
+  out.push({ type: "scatter3d", mode: "lines", name: "HIVE", x: fx, y: fy, z: fz,
+    line: { color: frameColor, width: 5 }, hoverinfo: "skip", legendgroup: "hive" });
+  return out;
+}
+
 function render() {
   const p = params();
   const rows = compute(p);
@@ -235,9 +291,10 @@ function render() {
   const t3 = [];
   rows.forEach(r => {
     const ux = r.x ? -r.sx / r.x : 0, uy = r.x ? -r.by / r.x : 0; // unit vector launcher → goal
+    const arc = r.pts.filter(q => q.d < r.x).concat(r.hAtGoal >= 0 ? [{ d: r.x, y: r.hAtGoal }] : []);
     t3.push({
       type: "scatter3d", mode: "lines", name: `Shot ${r.i + 1}`, legendgroup: "s" + r.i,
-      x: r.pts.map(q => r.sx + ux * q.d), y: r.pts.map(q => r.by + uy * q.d), z: r.pts.map(q => q.y),
+      x: arc.map(q => r.sx + ux * q.d), y: arc.map(q => r.by + uy * q.d), z: arc.map(q => q.y),
       line: { color: r.color, width: 6 },
       hovertemplate: `Shot ${r.i + 1} · v₀ ${fmtV(r.v)}<br>height %{z:.2f} m<extra></extra>`,
     });
@@ -250,10 +307,9 @@ function render() {
     t3.push({ type: "scatter3d", mode: "lines", showlegend: false, legendgroup: "s" + r.i, hoverinfo: "skip",
       x: [r.sx, 0], y: [r.by, 0], z: [0, 0], line: { color: r.color, width: 2, dash: "dash" }, opacity: 0.5 });
   });
-  t3.push({ type: "scatter3d", mode: "lines", showlegend: false, x: [0, 0], y: [0, 0], z: [0, p.yt],
-    line: { color: muted, width: 5 }, hoverinfo: "skip" });
+  t3.push(...hiveTraces(p.yt, muted));
   t3.push({ type: "scatter3d", mode: "markers", name: "Goal", x: [0], y: [0], z: [p.yt],
-    marker: { size: 10, color: "#e03131", symbol: "diamond" }, hovertemplate: `Goal<br>height ${p.yt} m<extra></extra>` });
+    marker: { size: 4, color: "#ffd43b", symbol: "diamond" }, hovertemplate: `Goal (CELL opening)<br>height ${p.yt} m<extra></extra>` });
   const ax = title => ({ title, gridcolor: grid, zerolinecolor: grid, color: muted, backgroundcolor: "rgba(0,0,0,0)" });
   const narrow = innerWidth <= 700;
   Plotly.react("p3d", t3, {
