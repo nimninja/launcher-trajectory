@@ -7,94 +7,121 @@
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
 <style>
   :root {
-    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66;
-    --border: #e2e2dc; --accent: #2a6fdb; --good: #1f9d55; --warn: #d97706; --bad: #c2410c;
-    --grid: #e6e6e0;
+    --bg: #f7f7f5; --panel: #ffffff; --panel-a: rgba(255,255,255,.92); --text: #1d1d1b; --muted: #6b6b66;
+    --border: #e2e2dc; --accent: #2a6fdb; --good: #1f9d55; --bad: #c2410c; --grid: #e6e6e0;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #141413; --panel: #1e1e1c; --text: #ecebe6; --muted: #9b9a94;
+      --bg: #141413; --panel: #1e1e1c; --panel-a: rgba(30,30,28,.92); --text: #ecebe6; --muted: #9b9a94;
       --border: #33332f; --accent: #6aa0ff; --grid: #2e2e2a;
     }
   }
   :root[data-theme="dark"] {
-    --bg: #141413; --panel: #1e1e1c; --text: #ecebe6; --muted: #9b9a94;
+    --bg: #141413; --panel: #1e1e1c; --panel-a: rgba(30,30,28,.92); --text: #ecebe6; --muted: #9b9a94;
     --border: #33332f; --accent: #6aa0ff; --grid: #2e2e2a;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
     font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+
+  /* Full-screen 3D stage */
+  #stage { position: relative; height: 100vh; height: 100dvh; width: 100%; }
+  #p3d { position: absolute; inset: 0; }
+  .title { position: absolute; top: 14px; left: 16px; z-index: 2; pointer-events: none; }
+  .title h1 { font-size: 20px; margin: 0; }
+  .title .eq { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); }
+  #panel { position: absolute; top: 14px; right: 14px; bottom: 14px; width: 340px; z-index: 3;
+    background: var(--panel-a); border: 1px solid var(--border); border-radius: 12px;
+    backdrop-filter: blur(6px); overflow-y: auto; padding: 14px; }
+  #panel.collapsed { bottom: auto; overflow: hidden; }
+  #panel.collapsed .body { display: none; }
+  .phead { display: flex; justify-content: space-between; align-items: center; }
+  .phead strong { font-size: 14px; }
+  button { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  button:hover { border-color: var(--accent); }
+  .scroll-hint { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 2;
+    color: var(--muted); font-size: 12px; text-decoration: none; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0 4px; }
+  label.f { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; text-transform: uppercase; letter-spacing: .04em; }
+  input[type=number], select { width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); color: var(--text); font: inherit; font-size: 14px; }
+  h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 16px 0 6px;
+    display: flex; justify-content: space-between; align-items: center; }
+  .shot { padding: 8px 0; border-top: 1px solid var(--border); }
+  .shot .row1 { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .shot .row1 .meta { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .shot .row2 { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .shot input[type=range] { flex: 1; min-width: 0; }
+  .shot .val { font-variant-numeric: tabular-nums; font-size: 13px; width: 70px; text-align: right; }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px solid var(--border); color: var(--muted); }
+  .tag.auto { color: var(--good); border-color: var(--good); }
+  .tag.btn { cursor: pointer; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .hit { color: var(--good); } .miss { color: var(--bad); }
+
   main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 48px; }
-  h1 { font-size: 24px; margin: 0 0 4px; }
-  .sub { color: var(--muted); margin: 0 0 20px; }
-  .eq { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--muted); }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px 18px; align-items: end; }
-  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
-  input[type=number], select { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
-    background: var(--bg); color: var(--text); font: inherit; }
-  .v0 { grid-column: 1 / -1; }
-  .v0row { display: flex; gap: 12px; align-items: center; }
-  .v0row input[type=range] { flex: 1; accent-color: var(--accent); }
-  .v0val { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 90px; text-align: right; }
-  .toggle { display: flex; gap: 8px; align-items: center; font-size: 14px; }
-  .plots { display: grid; grid-template-columns: 1fr; gap: 16px; }
-  @media (min-width: 900px) { .plots { grid-template-columns: 1.15fr 1fr; } }
-  .plot { width: 100%; height: 480px; }
   h2 { font-size: 16px; margin: 0 0 8px; }
+  #p2d { width: 100%; height: 440px; }
   .tablewrap { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 14px; }
   th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
   th:first-child, td:first-child, td.l, th.l { text-align: left; }
-  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
-  .hit { color: var(--good); } .miss { color: var(--bad); }
   .note { color: var(--muted); font-size: 13px; margin-top: 10px; }
+
+  @media (max-width: 700px) {
+    #stage { height: auto; }
+    #p3d { position: relative; height: 70vh; }
+    #panel { position: static; width: auto; margin: 0 16px; }
+    .scroll-hint { display: none; }
+  }
 </style>
 </head>
 <body>
-<main>
-  <h1>Launcher Trajectory</h1>
-  <p class="sub">Each shot's flight arc toward the goal, from
-    <span class="eq">y(x) = y₀ + x·tan θ − g·x² / (2·v₀²·cos²θ)</span>,
-    where x = √(back² + side²).</p>
-
-  <div class="card controls">
-    <div>
-      <label for="units">Distance units (data)</label>
-      <select id="units">
-        <option value="0.0254" selected>inches</option>
-        <option value="0.01">centimeters</option>
-        <option value="0.3048">feet</option>
-        <option value="1">meters</option>
-      </select>
-    </div>
-    <div><label for="theta">Launch angle θ (°)</label><input id="theta" type="number" value="70" step="1"></div>
-    <div><label for="g">g (m/s²)</label><input id="g" type="number" value="9.81" step="0.01"></div>
-    <div><label for="y0">Launch height y₀ (m)</label><input id="y0" type="number" value="0.2" step="0.05"></div>
-    <div><label for="yt">Goal height y (m)</label><input id="yt" type="number" value="1.2" step="0.05"></div>
-    <div class="v0">
-      <label for="v0">Launch speed v₀ (m/s)</label>
-      <div class="v0row">
-        <input id="v0" type="range" min="1" max="20" step="0.05" value="6">
-        <span class="v0val" id="v0val"></span>
-      </div>
-      <div class="toggle" style="margin-top:8px">
-        <input id="useReq" type="checkbox"><label for="useReq" style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:var(--text)">Use each shot's required v₀ instead of the slider</label>
-      </div>
-    </div>
+<section id="stage">
+  <div class="title">
+    <h1>Launcher Trajectory</h1>
+    <div class="eq">y(x) = y₀ + x·tan θ − g·x² / (2·v₀²·cos²θ), &nbsp;x = √(back² + side²)</div>
   </div>
+  <div id="p3d"></div>
+  <aside id="panel">
+    <div class="phead">
+      <strong>Controls</strong>
+      <button id="collapse" type="button">Hide</button>
+    </div>
+    <div class="body">
+      <div class="grid2">
+        <div>
+          <label class="f" for="units">Data units</label>
+          <select id="units">
+            <option value="0.0254" selected>inches</option>
+            <option value="0.01">centimeters</option>
+            <option value="0.3048">feet</option>
+            <option value="1">meters</option>
+          </select>
+        </div>
+        <div><label class="f" for="theta">Angle θ (°)</label><input id="theta" type="number" value="70" step="1"></div>
+        <div><label class="f" for="y0">Launch y₀ (m)</label><input id="y0" type="number" value="0.2" step="0.05"></div>
+        <div><label class="f" for="yt">Goal y (m)</label><input id="yt" type="number" value="1.2" step="0.05"></div>
+        <div><label class="f" for="g">g (m/s²)</label><input id="g" type="number" value="9.81" step="0.01"></div>
+      </div>
+      <h3>Launch speed v₀ per shot <button id="autoAll" type="button">All → auto</button></h3>
+      <div id="shots"></div>
+    </div>
+  </aside>
+  <a class="scroll-hint" href="#more">↓ side view &amp; table</a>
+</section>
 
-  <div class="plots">
-    <div class="card"><h2>3D view</h2><div id="p3d" class="plot"></div></div>
-    <div class="card"><h2>Side view (height vs. distance to goal)</h2><div id="p2d" class="plot"></div></div>
-  </div>
-
+<main id="more">
+  <div class="card"><h2>Side view (height vs. distance to goal)</h2><div id="p2d"></div></div>
   <div class="card">
     <h2>Shots</h2>
     <div class="tablewrap"><table id="tbl"></table></div>
-    <p class="note">Required v₀ is the speed that makes the arc pass through the goal height at distance x:
-      v₀ = √( g·x² / (2·cos²θ·(y₀ + x·tan θ − y)) ). "Height at goal" uses the slider v₀.
+    <p class="note">"Auto" sets each shot's v₀ so the arc passes through the goal height at distance x:
+      v₀ = √( g·x² / (2·cos²θ·(y₀ + x·tan θ − y)) ). Drag a shot's slider to override it.
       Left side is drawn at negative X, right at positive X; the goal sits at the origin.</p>
   </div>
 </main>
@@ -109,12 +136,13 @@ const SHOTS = [
   { back: 30, side: 36, dir: "right",  result: "yes", pct: 60 },
   { back: 32, side: 12, dir: "right",  result: "yes", pct: 85 },
 ];
+const PALETTE = ["#2a6fdb", "#e8590c", "#2f9e44", "#ae3ec9", "#f08c00", "#0c8599", "#c2255c"];
+const V_MIN = 0.5, V_MAX = 15;
+const override = SHOTS.map(() => null); // null = auto (hit the goal)
 
 const $ = id => document.getElementById(id);
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
-
-// Shot colors: a fixed categorical palette so each shot is the same color in every view.
-const PALETTE = ["#2a6fdb", "#e8590c", "#2f9e44", "#ae3ec9", "#f08c00", "#0c8599", "#c2255c"];
+const fmt = (n, d = 2) => isFinite(n) ? n.toFixed(d) : "—";
 
 function params() {
   return {
@@ -123,8 +151,6 @@ function params() {
     g: parseFloat($("g").value),
     y0: parseFloat($("y0").value),
     yt: parseFloat($("yt").value),
-    v0: parseFloat($("v0").value),
-    useReq: $("useReq").checked,
   };
 }
 
@@ -142,56 +168,87 @@ function compute(p) {
     const x = Math.hypot(sx, by);
     const theta = s.side ? Math.atan(s.back / s.side) * 180 / Math.PI : NaN;
     const vReq = requiredV0(x, p);
-    const v = p.useReq && isFinite(vReq) ? vReq : p.v0;
+    const auto = override[i] === null;
+    const v = auto ? (isFinite(vReq) ? vReq : V_MAX) : override[i];
     // Sample the arc from launch until it lands (y = 0), capped at 1.5× the goal distance.
-    const pts = [];
-    const maxD = Math.max(x * 1.5, 0.01), N = 120;
+    const pts = [], maxD = Math.max(x * 1.5, 0.01), N = 150;
     for (let j = 0; j <= N; j++) {
       const d = maxD * j / N, y = height(d, v, p);
       if (y < 0 && j > 0) break;
       pts.push({ d, y });
     }
-    return { ...s, i, sx, by, x, theta, vReq, v, hAtGoal: height(x, p.v0, p), pts, color: PALETTE[i % PALETTE.length] };
+    return { ...s, i, sx, by, x, theta, vReq, v, auto, hAtGoal: height(x, v, p), pts, color: PALETTE[i % PALETTE.length] };
   });
 }
 
-function fmt(n, d = 2) { return isFinite(n) ? n.toFixed(d) : "—"; }
+// ---- per-shot slider panel (built once, values refreshed on render) ----
+function buildShotControls() {
+  $("shots").innerHTML = SHOTS.map((s, i) => `
+    <div class="shot">
+      <div class="row1">
+        <span class="dot" style="background:${PALETTE[i]}"></span>
+        <strong>Shot ${i + 1}</strong>
+        <span class="meta">${s.back} back · ${s.side} ${s.dir} · ${s.result} ${s.pct}%</span>
+        <span class="tag" id="tag${i}"></span>
+      </div>
+      <div class="row2">
+        <input type="range" id="v${i}" min="${V_MIN}" max="${V_MAX}" step="0.01" aria-label="Shot ${i + 1} v0">
+        <span class="val" id="vv${i}"></span>
+      </div>
+    </div>`).join("");
+  SHOTS.forEach((_, i) => {
+    $("v" + i).addEventListener("input", e => { override[i] = parseFloat(e.target.value); render(); });
+    $("tag" + i).addEventListener("click", () => { if (override[i] !== null) { override[i] = null; render(); } });
+  });
+}
 
 function render() {
   const p = params();
-  $("v0val").textContent = p.useReq ? "per shot" : p.v0.toFixed(2) + " m/s";
-  $("v0").disabled = p.useReq;
   const rows = compute(p);
   const text = css("--text"), muted = css("--muted"), grid = css("--grid");
   const font = { color: text, family: "system-ui, sans-serif", size: 12 };
 
+  rows.forEach(r => {
+    const sl = $("v" + r.i);
+    if (document.activeElement !== sl) sl.value = r.v;
+    $("vv" + r.i).textContent = r.v.toFixed(2) + " m/s";
+    const tag = $("tag" + r.i);
+    tag.className = "tag " + (r.auto ? "auto" : "btn");
+    tag.textContent = r.auto ? (isFinite(r.vReq) ? "auto" : "unreachable") : "reset";
+    tag.title = r.auto ? "v₀ chosen so the arc hits the goal" : "Click to go back to auto";
+  });
+
   // ---- 3D ----
   const t3 = [];
   rows.forEach(r => {
-    const ux = -r.sx / r.x, uy = -r.by / r.x; // unit vector launcher → goal
+    const ux = r.x ? -r.sx / r.x : 0, uy = r.x ? -r.by / r.x : 0; // unit vector launcher → goal
     t3.push({
       type: "scatter3d", mode: "lines", name: `Shot ${r.i + 1}`, legendgroup: "s" + r.i,
       x: r.pts.map(q => r.sx + ux * q.d), y: r.pts.map(q => r.by + uy * q.d), z: r.pts.map(q => q.y),
-      line: { color: r.color, width: 5 },
-      hovertemplate: `Shot ${r.i + 1}<br>height %{z:.2f} m<extra></extra>`,
+      line: { color: r.color, width: 6 },
+      hovertemplate: `Shot ${r.i + 1} · v₀ ${r.v.toFixed(2)} m/s<br>height %{z:.2f} m<extra></extra>`,
     });
     t3.push({
       type: "scatter3d", mode: "markers", showlegend: false, legendgroup: "s" + r.i,
-      x: [r.sx], y: [r.by], z: [p.y0], marker: { size: 5, color: r.color },
+      x: [r.sx], y: [r.by], z: [p.y0], marker: { size: 6, color: r.color },
       hovertemplate: `Shot ${r.i + 1}: ${r.back} back, ${r.side} ${r.dir}<br>${r.result} ${r.pct}%<extra></extra>`,
     });
+    // dashed ground track from launcher to goal
+    t3.push({ type: "scatter3d", mode: "lines", showlegend: false, legendgroup: "s" + r.i, hoverinfo: "skip",
+      x: [r.sx, 0], y: [r.by, 0], z: [0, 0], line: { color: r.color, width: 2, dash: "dash" }, opacity: 0.5 });
   });
-  // goal post + target
   t3.push({ type: "scatter3d", mode: "lines", showlegend: false, x: [0, 0], y: [0, 0], z: [0, p.yt],
-    line: { color: muted, width: 4 }, hoverinfo: "skip" });
+    line: { color: muted, width: 5 }, hoverinfo: "skip" });
   t3.push({ type: "scatter3d", mode: "markers", name: "Goal", x: [0], y: [0], z: [p.yt],
-    marker: { size: 8, color: "#e03131", symbol: "diamond" }, hovertemplate: `Goal<br>height ${p.yt} m<extra></extra>` });
-  const ax = (title) => ({ title, gridcolor: grid, zerolinecolor: grid, color: muted, backgroundcolor: "rgba(0,0,0,0)" });
+    marker: { size: 10, color: "#e03131", symbol: "diamond" }, hovertemplate: `Goal<br>height ${p.yt} m<extra></extra>` });
+  const ax = title => ({ title, gridcolor: grid, zerolinecolor: grid, color: muted, backgroundcolor: "rgba(0,0,0,0)" });
+  const narrow = innerWidth <= 700;
   Plotly.react("p3d", t3, {
-    paper_bgcolor: "rgba(0,0,0,0)", font, margin: { l: 0, r: 0, t: 0, b: 0 },
-    legend: { orientation: "h", y: 1.02 },
+    paper_bgcolor: "rgba(0,0,0,0)", font, margin: { l: 0, r: narrow ? 0 : 360, t: 60, b: 0 },
+    legend: { orientation: "h", x: 0.01, y: 0.99, yanchor: "top" },
+    uirevision: "keep", // keep the camera when sliders move
     scene: { xaxis: ax("side (m)  ← left · right →"), yaxis: ax("back (m)"), zaxis: ax("height (m)"),
-             aspectmode: "data", camera: { eye: { x: 1.4, y: 1.6, z: 0.9 } } },
+             aspectmode: "data", camera: { eye: { x: 1.3, y: 1.5, z: 0.8 } } },
   }, { responsive: true, displaylogo: false });
 
   // ---- 2D side view ----
@@ -199,35 +256,39 @@ function render() {
     type: "scatter", mode: "lines", name: `Shot ${r.i + 1}`, x: r.pts.map(q => q.d), y: r.pts.map(q => q.y),
     line: { color: r.color, width: 2.5 }, hovertemplate: `Shot ${r.i + 1}<br>%{x:.2f} m, %{y:.2f} m<extra></extra>`,
   }));
-  t2.push({ type: "scatter", mode: "markers", name: "Goal distance", x: rows.map(r => r.x), y: rows.map(() => p.yt),
-    marker: { size: 10, symbol: "line-ns-open", color: rows.map(r => r.color), line: { width: 3, color: rows.map(r => r.color) } },
-    hovertemplate: "goal at %{x:.2f} m<extra></extra>" });
+  t2.push({ type: "scatter", mode: "markers", name: "Goal", x: rows.map(r => r.x), y: rows.map(() => p.yt),
+    marker: { size: 11, symbol: "diamond", color: rows.map(r => r.color) }, hovertemplate: "goal at %{x:.2f} m<extra></extra>" });
   Plotly.react("p2d", t2, {
     paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font, margin: { l: 50, r: 10, t: 10, b: 45 },
-    showlegend: false,
+    showlegend: false, uirevision: "keep",
     xaxis: { title: "horizontal distance x (m)", gridcolor: grid, zeroline: false, rangemode: "tozero" },
     yaxis: { title: "height y (m)", gridcolor: grid, zeroline: false, rangemode: "tozero" },
     shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: p.yt, y1: p.yt, line: { color: "#e03131", dash: "dot", width: 1.5 } }],
-    annotations: [{ xref: "paper", x: 1, y: p.yt, text: "goal height", showarrow: false, xanchor: "right", yanchor: "bottom", font: { color: "#e03131", size: 11 } }],
   }, { responsive: true, displaylogo: false });
 
   // ---- table ----
-  const tol = 0.1; // m: counts as "at goal height" within ±10 cm
+  const tol = 0.05; // m
   $("tbl").innerHTML = `<tr><th class="l">Shot</th><th>Back</th><th>Side</th><th class="l">Dir</th><th class="l">Result</th>
-    <th>x (m)</th><th>θ (°)</th><th>From goal (°)</th><th>Required v₀ (m/s)</th><th>Height at goal (m)</th></tr>` +
+    <th>x (m)</th><th>θ (°)</th><th>From goal (°)</th><th>Auto v₀ (m/s)</th><th>Used v₀ (m/s)</th><th>Height at goal (m)</th></tr>` +
     rows.map(r => {
       const dh = r.hAtGoal - p.yt;
-      const cls = Math.abs(dh) <= tol ? "hit" : "miss";
-      return `<tr><td><span class="dot" style="background:${r.color}"></span>${r.i + 1}</td>
+      return `<tr><td><span class="dot" style="background:${r.color};margin-right:6px"></span>${r.i + 1}</td>
         <td>${r.back}</td><td>${r.side}</td><td class="l">${r.dir}</td><td class="l">${r.result} ${r.pct}%</td>
         <td>${fmt(r.x)}</td><td>${fmt(r.theta, 1)}</td><td>${fmt(90 - r.theta, 1)}</td>
-        <td>${isFinite(r.vReq) ? fmt(r.vReq) : "unreachable"}</td>
-        <td class="${cls}">${fmt(r.hAtGoal)} (${dh >= 0 ? "+" : ""}${fmt(dh)})</td></tr>`;
+        <td>${isFinite(r.vReq) ? fmt(r.vReq) : "unreachable"}</td><td>${fmt(r.v)}</td>
+        <td class="${Math.abs(dh) <= tol ? "hit" : "miss"}">${fmt(r.hAtGoal)} (${dh >= 0 ? "+" : ""}${fmt(dh)})</td></tr>`;
     }).join("");
 }
 
-["units", "theta", "g", "y0", "yt", "v0", "useReq"].forEach(id => $(id).addEventListener("input", render));
+buildShotControls();
+["units", "theta", "g", "y0", "yt"].forEach(id => $(id).addEventListener("input", render));
+$("autoAll").addEventListener("click", () => { override.fill(null); render(); });
+$("collapse").addEventListener("click", () => {
+  const c = $("panel").classList.toggle("collapsed");
+  $("collapse").textContent = c ? "Show" : "Hide";
+});
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+addEventListener("resize", () => Plotly.relayout("p3d", { "margin.r": innerWidth <= 700 ? 0 : 360 }));
 render();
 </script>
 </body>
