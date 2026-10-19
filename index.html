@@ -358,6 +358,15 @@ function cellTraces(toW, u0, u1, color, opacity) {
   ];
 }
 
+// Same inputs → same trace objects, so Plotly.react can skip re-uploading the static geometry.
+let HIVE_MEMO = null;
+function hiveTracesCached(frameColor, gridColor, b) {
+  const t = v => Math.round(v / TILE * 1000);
+  const key = [frameColor, gridColor, t(b.x0), t(b.x1), t(b.y0), t(b.y1)].join();
+  if (!HIVE_MEMO || HIVE_MEMO.key !== key) HIVE_MEMO = { key, traces: hiveTraces(frameColor, gridColor, b) };
+  return HIVE_MEMO.traces;
+}
+
 function hiveTraces(frameColor, gridColor, bounds) {
   const out = [];
   const addHive = (hx, tip, color, opacity) => {
@@ -624,7 +633,7 @@ function ensureHeat(p) {
   if (!$("heatOn").checked) return;
   const key = physKey(p);
   if (key === HEAT.key) return;
-  HEAT.key = key; HEAT.p = p; HEAT.next = 0;
+  HEAT.key = key; HEAT.p = p; HEAT.next = 0; HEAT.version = (HEAT.version || 0) + 1;
   HEAT.total = HEAT.xs.length * HEAT.ys.length;
   HEAT.lo = new Float64Array(HEAT.total).fill(NaN); HEAT.hi = new Float64Array(HEAT.total).fill(NaN);
   clearTimeout(HEAT.timer);
@@ -637,6 +646,7 @@ function heatChunk() {
     const w = speedWindow(HEAT.xs[ix], HEAT.ys[jy], HEAT.p);
     HEAT.lo[jy * nx + ix] = w.vlo; HEAT.hi[jy * nx + ix] = w.vhi;
   }
+  HEAT.version++;
   updateHeatTrace();
   if (HEAT.next < HEAT.total) HEAT.timer = setTimeout(heatChunk, 0);
 }
@@ -655,7 +665,7 @@ function heatZ() {
   }
   return { Z, max };
 }
-function updateHeatTrace() {
+function updateHeatTrace(fromRender = false) {
   const gd = $("pmap");
   if (!gd.data || !gd.data[0] || gd.data[0].type !== "heatmap") return;
   const { Z, max } = heatZ(), on = $("heatOn").checked;
@@ -663,12 +673,16 @@ function updateHeatTrace() {
   const g3 = $("p3d"), fi = g3.data ? g3.data.findIndex(t => t.name === "floor") : -1;
   // Repainting the 3D floor is costly: do it at most twice a second while the heatmap computes.
   const now = performance.now(), done = HEAT.next >= HEAT.total;
-  if (fi >= 0 && FLOOR && (done || now - (HEAT.floorAt || 0) > 500)) {
+  if (!fromRender && fi >= 0 && FLOOR && (done || now - (HEAT.floorAt || 0) > 500)) {
     HEAT.floorAt = now;
-    const c = floorColors(FLOOR);
+    const before = FLOOR_COLORS, c = floorColors(FLOOR);
+    if (c === before) return updateHeatLegend(on, max);
     Object.assign(FLOOR, c);
     Plotly.restyle(g3, { surfacecolor: [c.surfacecolor], colorscale: [c.colorscale], cmin: [c.cmin], cmax: [c.cmax], opacity: [c.opacity] }, [fi]);
   }
+  updateHeatLegend(on, max);
+}
+function updateHeatLegend(on, max) {
   const pct = HEAT.total ? Math.round(100 * HEAT.next / HEAT.total) : 0;
   $("heatbar").style.display = on ? "flex" : "none";
   $("heatlegend").textContent = `0 → ±${showRPM() ? Math.round(max) + " RPM" : max.toFixed(2) + " m/s"}; blank / gray = can't reach at this angle` + (pct < 100 ? ` · computing ${pct}%` : "");
@@ -727,7 +741,7 @@ function render() {
   const byy = rows.map(r => r.by).concat([PIVOT_Y - FRAME.d / 2, PIVOT_Y + 2 * TILE - 0.01]);
   const bounds = { x0: Math.min(...bx), x1: Math.max(...bx), y0: Math.min(...byy), y1: Math.max(...byy) };
   t3.push(floorTrace(bounds));
-  t3.push(...hiveTraces(muted, grid, bounds));
+  t3.push(...hiveTracesCached(muted, grid, bounds));
   t3.push({ type: "scatter3d", mode: "markers", name: "Goal", x: [0], y: [0], z: [p.yt],
     marker: { size: 4, color: "#ffd43b", symbol: "diamond" }, hovertemplate: `Goal (CELL opening)<br>height ${p.yt} m<extra></extra>` });
   if (anim) {
@@ -750,7 +764,7 @@ function render() {
   // ---- top-down field map (click to add) ----
   ensureHeat(p);
   renderMap(rows, muted, grid, font);
-  updateHeatTrace();
+  updateHeatTrace(true);
   updateCal(p);
 
   // ---- 2D side view ----
@@ -822,7 +836,7 @@ function renderMap(rows, muted, grid, font) {
   }, { staticPlot: true, responsive: true });
 }
 
-// A near-invisible floor surface over the whole field (1" grid) so the 3D view can be clicked and hovered.
+// A floor surface (2" grid) so the 3D view can be clicked and hovered.
 let FLOOR = null, FLOOR_KEY = "";
 function floorTrace(b) {
   // Whole tiles around everything drawn, plus one tile of margin, clamped to the field.
@@ -832,8 +846,8 @@ function floorTrace(b) {
   if (key !== FLOOR_KEY) {
     FLOOR_KEY = key;
     const xs = [], ys = [];
-    for (let k = 0; k <= (i1 - i0) * 24; k++) xs.push(FIELD_X + (i0 - 3) * TILE + k * IN);
-    for (let k = 0; k <= (j1 - j0) * 24; k++) ys.push(PIVOT_Y + (j0 - 3) * TILE + k * IN);
+    for (let k = 0; k <= (i1 - i0) * 12; k++) xs.push(FIELD_X + (i0 - 3) * TILE + k * 2 * IN);
+    for (let k = 0; k <= (j1 - j0) * 12; k++) ys.push(PIVOT_Y + (j0 - 3) * TILE + k * 2 * IN);
     FLOOR = { type: "surface", name: "floor", x: xs, y: ys, z: ys.map(() => xs.map(() => -0.003)),
       showscale: false, hoverinfo: "none", lighting: { ambient: 1, diffuse: 0, specular: 0, fresnel: 0 },
       contours: { x: { highlight: false }, y: { highlight: false }, z: { highlight: false } }, showlegend: false };
@@ -844,7 +858,13 @@ function floorTrace(b) {
 
 // Heat colors for the 3D floor: each 1" floor vertex takes its 4" heat cell. Unreachable cells get cmin (gray).
 const HEAT_SCALE = [[0, "#c92a2a"], [0.25, "#f08c00"], [0.5, "#fcc419"], [0.75, "#82c91e"], [1, "#2f9e44"]];
+let FLOOR_COLORS = null, FLOOR_COLORS_KEY = "";
 function floorColors(f) {
+  const key = [HEAT.version, FLOOR_KEY, $("heatOn").checked, $("vunit").value, $("wd").value, $("eff").value].join();
+  if (key !== FLOOR_COLORS_KEY) { FLOOR_COLORS_KEY = key; FLOOR_COLORS = floorColorsFresh(f); }
+  return FLOOR_COLORS;
+}
+function floorColorsFresh(f) {
   if (!$("heatOn").checked || !HEAT.lo) return { surfacecolor: null, colorscale: [[0, "#888"], [1, "#888"]], opacity: 0.06, cmin: 0, cmax: 1 };
   const { Z, max } = heatZ(), top = Math.max(max, 1e-6), bottom = -top / 20, gap = (0 - bottom) / (top - bottom);
   const x0 = FIELD_X - 3 * TILE, y0 = PIVOT_Y - 3 * TILE, n = HEAT.xs.length;
@@ -862,28 +882,33 @@ function describePoint(wx, wy) {
   const w = isFinite(v) ? speedWindow(wx, wy, p) : null;
   return `${((wy - SEAM_Y) / p.k).toFixed(1)} back · ${side.toFixed(1)}${dir} (${$("units").selectedOptions[0].text}) → ${isFinite(v) ? fmtV(v) : "unreachable"} ${out}${w && w.vhi > 0 ? " · window " + fmtHalf(w) : ""}`;
 }
-function hook3d() {
-  // Plotly's 3D click event is unreliable, so remember what's under the cursor (from hover)
-  // and treat a press + release without dragging as a click on it.
+// Plotly's 3D click event is unreliable, so remember what's under the cursor (from hover)
+// and treat a press + release without dragging as a click on it.
+let under3d = null, down3d = null;
+function bindPlotly3d() {
   const gd = $("p3d");
-  let under = null, down = null;
   gd.on("plotly_hover", ev => {
     const pt = ev.points && ev.points[0];
     if (!pt) return;
     if (pt.data.name === "floor") {
-      under = { floor: [pt.x, pt.y] };
+      under3d = { floor: [pt.x, pt.y] };
       $("hover3d").style.display = "block";
       $("hover3d").textContent = "Click to add: " + describePoint(pt.x, pt.y);
     } else {
-      under = pt.data.customdata ? { shot: pt.data.customdata[0] } : null;
+      under3d = pt.data.customdata ? { shot: pt.data.customdata[0] } : null;
       $("hover3d").style.display = "none";
     }
   });
-  gd.on("plotly_unhover", () => { under = null; $("hover3d").style.display = "none"; });
-  gd.addEventListener("pointerdown", e => { down = [e.clientX, e.clientY]; }, true);
+  gd.on("plotly_unhover", () => { under3d = null; $("hover3d").style.display = "none"; });
+}
+function hook3d() {
+  const gd = $("p3d");
+  bindPlotly3d();
+  gd.addEventListener("pointerdown", e => { down3d = [e.clientX, e.clientY]; }, true);
   gd.addEventListener("pointerup", e => {
-    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4 || !under) return;
-    down = null;
+    const under = under3d;
+    if (!down3d || Math.hypot(e.clientX - down3d[0], e.clientY - down3d[1]) > 4 || !under) return;
+    down3d = null;
     if (under.floor) addShot(under.floor[0], under.floor[1]);
     else if (under.shot !== undefined) {
       const el = $("shot" + under.shot);
@@ -893,6 +918,20 @@ function hook3d() {
       el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1200);
     }
   }, true);
+  // If the GPU drops the WebGL context (the 3D view goes black), rebuild the plot instead of staying black.
+  gd.addEventListener("webglcontextlost", e => {
+    e.preventDefault();
+    $("hover3d").style.display = "block";
+    $("hover3d").textContent = "Graphics reset by the browser, redrawing the 3D view…";
+    setTimeout(rebuild3d, 300);
+  }, true);
+}
+function rebuild3d() {
+  Plotly.purge("p3d");
+  FLOOR_KEY = ""; FLOOR_COLORS_KEY = ""; HIVE_MEMO = null;
+  render();
+  bindPlotly3d();
+  $("hover3d").style.display = "none";
 }
 
 // Click on the map → world coordinates → new launcher point.
