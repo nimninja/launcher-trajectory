@@ -65,6 +65,9 @@
   #hover3d { position: absolute; left: 16px; bottom: 36px; z-index: 2; font-size: 13px; pointer-events: none;
     background: var(--panel-a); border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; display: none; }
   .shot.flash { background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 6px; }
+  .btnrow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .btnrow select { width: auto; padding: 4px 6px; font-size: 13px; }
+  #animBtn.playing { border-color: var(--accent); color: var(--accent); }
   .rm { padding: 0 6px; font-size: 12px; line-height: 18px; }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
   .hit { color: var(--good); } .miss { color: var(--bad); }
@@ -128,6 +131,13 @@
       </div>
       <label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-top:8px">
         <input id="flip" type="checkbox"> Flip left/right ("left" = toward column B)</label>
+      <div class="btnrow">
+        <button id="animBtn" type="button">▶ Animate ball</button>
+        <select id="animSpeed" aria-label="Animation speed">
+          <option value="0.25">¼× speed</option><option value="0.5" selected>½× speed</option><option value="1">1× real time</option>
+        </select>
+        <button id="toggleData" type="button">Hide spreadsheet shots</button>
+      </div>
       <h3>Field map · click to add a shot <button id="clearAdded" type="button">Clear added</button></h3>
       <div id="pmap"></div>
       <div class="maphint" id="maphint">Click anywhere on the field to drop a launcher there.</div>
@@ -171,6 +181,9 @@ const shots = SHOTS.map(s => ({ ...s }));
 let addedCount = 0;
 try { (JSON.parse(localStorage.getItem("lt-added")) || []).forEach(a => shots.push({ added: true, n: ++addedCount, wx: a.wx, wy: a.wy })); } catch {}
 const override = shots.map(() => null); // null = auto (hit the goal)
+let showData = true;
+try { showData = localStorage.getItem("lt-showData") !== "0"; } catch {}
+let anim = null; // { t0, speed, p, rows, idx } while the ball animation runs
 const saveAdded = () => { try { localStorage.setItem("lt-added", JSON.stringify(shots.filter(s => s.added).map(({ wx, wy }) => ({ wx, wy })))); } catch {} };
 
 const $ = id => document.getElementById(id);
@@ -445,9 +458,63 @@ function simulate(sx, by, x, v, p) {
   return { status: "miss", what: "flies past", at: prev, path };
 }
 
+// ---- Ball animation ----
+const SPH = (() => {
+  const V = [], T = [], nl = 8, nm = 14;
+  for (let a = 0; a <= nl; a++) for (let b = 0; b < nm; b++) {
+    const th = Math.PI * a / nl, ph = 2 * Math.PI * b / nm;
+    V.push([Math.sin(th) * Math.cos(ph), Math.sin(th) * Math.sin(ph), Math.cos(th)]);
+  }
+  for (let a = 0; a < nl; a++) for (let b = 0; b < nm; b++) {
+    const i0 = a * nm + b, i1 = a * nm + (b + 1) % nm, i2 = (a + 1) * nm + b, i3 = (a + 1) * nm + (b + 1) % nm;
+    T.push([i0, i2, i1], [i1, i2, i3]);
+  }
+  return { V, T };
+})();
+const ballXYZ = (c, r) => ({ x: SPH.V.map(v => c[0] + v[0] * r), y: SPH.V.map(v => c[1] + v[1] * r), z: SPH.V.map(v => c[2] + v[2] * r) });
+
+function stepAnim(now) {
+  if (!anim) return;
+  const { p, rows, idx } = anim, t = (now - anim.t0) / 1000 * anim.speed;
+  let running = false;
+  const X = [], Y = [], Z = [];
+  rows.forEach(r => {
+    const path = r.sim.path, end = path[path.length - 1];
+    const d = r.v * Math.cos(p.t) * t; // horizontal speed × time
+    let P;
+    if (d >= end.d) P = end.P;
+    else {
+      running = true;
+      const ux = r.x ? -r.sx / r.x : 0, uy = r.x ? -r.by / r.x : 0;
+      P = [r.sx + ux * d, r.by + uy * d, height(d, r.v, p)];
+    }
+    const b = ballXYZ(P, p.ballR);
+    X.push(b.x); Y.push(b.y); Z.push(b.z);
+  });
+  if (rows.length) Plotly.restyle("p3d", { x: X, y: Y, z: Z }, idx);
+  if (running) anim.raf = requestAnimationFrame(stepAnim);
+  else anim.done = setTimeout(stopAnim, 1200); // hold the final positions, then bring the arcs back
+}
+function startAnim() {
+  if (anim) return stopAnim();
+  anim = { t0: 0, speed: parseFloat($("animSpeed").value) };
+  $("animBtn").textContent = "■ Stop"; $("animBtn").classList.add("playing");
+  render();
+  anim.raf = requestAnimationFrame(now => { anim.t0 = now; stepAnim(now); });
+}
+function stopAnim() {
+  if (!anim) return;
+  cancelAnimationFrame(anim.raf); clearTimeout(anim.done);
+  anim = null;
+  $("animBtn").textContent = "▶ Animate ball"; $("animBtn").classList.remove("playing");
+  render();
+}
+
 function render() {
   const p = params();
-  const rows = compute(p);
+  const rows = compute(p).filter(r => r.added || showData);
+  shots.forEach((s, i) => { $("shot" + i).style.display = s.added || showData ? "" : "none"; });
+  $("toggleData").textContent = showData ? "Hide spreadsheet shots" : "Show spreadsheet shots";
   const text = css("--text"), muted = css("--muted"), grid = css("--grid");
   const font = { color: text, family: "system-ui, sans-serif", size: 12 };
 
@@ -473,7 +540,7 @@ function render() {
   rows.forEach(r => {
     const ux = r.x ? -r.sx / r.x : 0, uy = r.x ? -r.by / r.x : 0; // unit vector launcher → goal
     t3.push({
-      type: "scatter3d", mode: "lines", name: r.label, legendgroup: "s" + r.i,
+      type: "scatter3d", mode: "lines", name: r.label, legendgroup: "s" + r.i, visible: anim ? "legendonly" : true,
       x: r.sim.path.map(q => q.P[0]), y: r.sim.path.map(q => q.P[1]), z: r.sim.path.map(q => q.P[2]),
       line: { color: r.color, width: 6 },
       hovertemplate: `${r.label} · v₀ ${fmtV(r.v)}<br>height %{z:.2f} m<extra></extra>`,
@@ -498,6 +565,13 @@ function render() {
   t3.push(...hiveTraces(muted, grid, bounds));
   t3.push({ type: "scatter3d", mode: "markers", name: "Goal", x: [0], y: [0], z: [p.yt],
     marker: { size: 4, color: "#ffd43b", symbol: "diamond" }, hovertemplate: `Goal (CELL opening)<br>height ${p.yt} m<extra></extra>` });
+  if (anim) {
+    // One true-size ball per shot, moved each frame by stepAnim()
+    anim.p = p; anim.rows = rows; anim.idx = rows.map((_, k) => t3.length + k);
+    const color = p.ballR > 1.5 * 0.0254 ? "#e03131" : "#ffd43b";
+    rows.forEach(r => t3.push({ type: "mesh3d", ...ballXYZ([r.sx, r.by, p.y0], p.ballR), i: SPH.T.map(t => t[0]), j: SPH.T.map(t => t[1]),
+      k: SPH.T.map(t => t[2]), color, lighting: { ambient: 0.55, diffuse: 0.8, specular: 0.4 }, hoverinfo: "skip", showlegend: false }));
+  }
   const ax = title => ({ title, gridcolor: grid, zerolinecolor: grid, color: muted, backgroundcolor: "rgba(0,0,0,0)" });
   const narrow = innerWidth <= 700;
   Plotly.react("p3d", t3, {
@@ -659,6 +733,12 @@ $("clearAdded").addEventListener("click", () => {
 buildShotControls();
 ["units", "theta", "g", "y0", "yt", "vunit", "wd", "eff", "flip", "ball"].forEach(id => $(id).addEventListener("input", render));
 $("autoAll").addEventListener("click", () => { override.fill(null); render(); });
+$("animBtn").addEventListener("click", startAnim);
+$("toggleData").addEventListener("click", () => {
+  showData = !showData;
+  try { localStorage.setItem("lt-showData", showData ? "1" : "0"); } catch {}
+  render();
+});
 $("collapse").addEventListener("click", () => {
   const c = $("panel").classList.toggle("collapsed");
   $("collapse").textContent = c ? "Show" : "Hide";
