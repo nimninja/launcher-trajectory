@@ -150,7 +150,7 @@
       <div id="pmap"></div>
       <div class="maphint" id="maphint">Click anywhere on the field to drop a launcher there.</div>
       <label class="maphint" style="display:flex;gap:6px;align-items:center;margin-top:6px">
-        <input id="heatOn" type="checkbox" checked> Heatmap: how far off the speed can be and still go in</label>
+        <input id="heatOn" type="checkbox" checked> Heatmap (map + 3D floor): how far off the speed can be and still go in</label>
       <div class="heatbar" id="heatbar"><span class="grad"></span><span id="heatlegend"></span></div>
       <h3>Calibrate efficiency <button id="calApply" type="button" disabled>Apply</button></h3>
       <div class="maphint" id="calbox"></div>
@@ -660,9 +660,18 @@ function updateHeatTrace() {
   if (!gd.data || !gd.data[0] || gd.data[0].type !== "heatmap") return;
   const { Z, max } = heatZ(), on = $("heatOn").checked;
   Plotly.restyle(gd, { z: [Z], zmax: [Math.max(max, 1e-6)], visible: [on] }, [0]);
+  const g3 = $("p3d"), fi = g3.data ? g3.data.findIndex(t => t.name === "floor") : -1;
+  // Repainting the 3D floor is costly: do it at most twice a second while the heatmap computes.
+  const now = performance.now(), done = HEAT.next >= HEAT.total;
+  if (fi >= 0 && FLOOR && (done || now - (HEAT.floorAt || 0) > 500)) {
+    HEAT.floorAt = now;
+    const c = floorColors(FLOOR);
+    Object.assign(FLOOR, c);
+    Plotly.restyle(g3, { surfacecolor: [c.surfacecolor], colorscale: [c.colorscale], cmin: [c.cmin], cmax: [c.cmax], opacity: [c.opacity] }, [fi]);
+  }
   const pct = HEAT.total ? Math.round(100 * HEAT.next / HEAT.total) : 0;
   $("heatbar").style.display = on ? "flex" : "none";
-  $("heatlegend").textContent = `0 → ±${showRPM() ? Math.round(max) + " RPM" : max.toFixed(2) + " m/s"}; blank = can't reach at this angle` + (pct < 100 ? ` · computing ${pct}%` : "");
+  $("heatlegend").textContent = `0 → ±${showRPM() ? Math.round(max) + " RPM" : max.toFixed(2) + " m/s"}; blank / gray = can't reach at this angle` + (pct < 100 ? ` · computing ${pct}%` : "");
 }
 
 function render() {
@@ -795,7 +804,7 @@ function renderMap(rows, muted, grid, font) {
   const { Z, max } = heatZ();
   const traces = [
     { type: "heatmap", x: HEAT.xs, y: HEAT.ys, z: Z, zmin: 0, zmax: Math.max(max, 1e-6), showscale: false, opacity: 0.75,
-      colorscale: [[0, "#c92a2a"], [0.25, "#f08c00"], [0.5, "#fcc419"], [0.75, "#82c91e"], [1, "#2f9e44"]],
+      colorscale: HEAT_SCALE,
       hoverinfo: "skip", visible: $("heatOn").checked },
     { type: "scatter", mode: "text", x: lx, y: ly, text: lt, textfont: { color: muted, size: 9 }, hoverinfo: "skip" },
     ...rows.map(r => ({ type: "scatter", mode: "lines", x: [r.sx, 0], y: [r.by, 0], line: { color: r.color, width: 1, dash: "dot" }, hoverinfo: "skip" })),
@@ -826,10 +835,25 @@ function floorTrace(b) {
     for (let k = 0; k <= (i1 - i0) * 24; k++) xs.push(FIELD_X + (i0 - 3) * TILE + k * IN);
     for (let k = 0; k <= (j1 - j0) * 24; k++) ys.push(PIVOT_Y + (j0 - 3) * TILE + k * IN);
     FLOOR = { type: "surface", name: "floor", x: xs, y: ys, z: ys.map(() => xs.map(() => -0.003)),
-      showscale: false, opacity: 0.06, colorscale: [[0, "#888"], [1, "#888"]], hoverinfo: "none",
+      showscale: false, hoverinfo: "none", lighting: { ambient: 1, diffuse: 0, specular: 0, fresnel: 0 },
       contours: { x: { highlight: false }, y: { highlight: false }, z: { highlight: false } }, showlegend: false };
   }
+  Object.assign(FLOOR, floorColors(FLOOR));
   return FLOOR;
+}
+
+// Heat colors for the 3D floor: each 1" floor vertex takes its 4" heat cell. Unreachable cells get cmin (gray).
+const HEAT_SCALE = [[0, "#c92a2a"], [0.25, "#f08c00"], [0.5, "#fcc419"], [0.75, "#82c91e"], [1, "#2f9e44"]];
+function floorColors(f) {
+  if (!$("heatOn").checked || !HEAT.lo) return { surfacecolor: null, colorscale: [[0, "#888"], [1, "#888"]], opacity: 0.06, cmin: 0, cmax: 1 };
+  const { Z, max } = heatZ(), top = Math.max(max, 1e-6), bottom = -top / 20, gap = (0 - bottom) / (top - bottom);
+  const x0 = FIELD_X - 3 * TILE, y0 = PIVOT_Y - 3 * TILE, n = HEAT.xs.length;
+  const cell = (v, o) => Math.min(n - 1, Math.max(0, Math.floor((v - o) / HEAT_STEP)));
+  const S = f.y.map(y => { const row = Z[cell(y, y0)]; return f.x.map(x => { const z = row[cell(x, x0)]; return z === null ? bottom : z; }); });
+  return {
+    surfacecolor: S, cmin: bottom, cmax: top, opacity: 0.8,
+    colorscale: [[0, "#5c5f66"], [gap * 0.99, "#5c5f66"], ...HEAT_SCALE.map(([t, c]) => [gap + t * (1 - gap), c])],
+  };
 }
 function describePoint(wx, wy) {
   const p = params(), x = Math.hypot(wx, wy), v = requiredV0(x, p);
