@@ -60,6 +60,11 @@
   .tag.btn { cursor: pointer; }
   #pmap { width: 100%; height: 310px; cursor: crosshair; }
   .maphint { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .st { font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .st.in { color: var(--good); } .st.wall { color: var(--bad); } .st.miss { color: #e8a200; }
+  #hover3d { position: absolute; left: 16px; bottom: 36px; z-index: 2; font-size: 13px; pointer-events: none;
+    background: var(--panel-a); border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; display: none; }
+  .shot.flash { background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 6px; }
   .rm { padding: 0 6px; font-size: 12px; line-height: 18px; }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
   .hit { color: var(--good); } .miss { color: var(--bad); }
@@ -114,6 +119,10 @@
           <label class="f" for="vunit">Show speed as</label>
           <select id="vunit"><option value="rpm" selected>wheel RPM</option><option value="ms">m/s</option></select>
         </div>
+        <div>
+          <label class="f" for="ball">Ball</label>
+          <select id="ball"><option value="2.8" selected>POLLEN 2.8"</option><option value="3.6">NECTAR 3.6"</option></select>
+        </div>
         <div><label class="f" for="wd">Wheel diameter (mm)</label><input id="wd" type="number" value="72" step="1" min="1"></div>
         <div><label class="f" for="eff" title="Ball exit speed ÷ wheel surface speed. ~1 for two wheels, ~0.5 for one wheel against a hood.">Efficiency (0–1)</label><input id="eff" type="number" value="1" step="0.05" min="0.05" max="1"></div>
       </div>
@@ -126,6 +135,7 @@
       <div id="shots"></div>
     </div>
   </aside>
+  <div id="hover3d"></div>
   <a class="scroll-hint" href="#more">↓ side view &amp; table</a>
 </section>
 
@@ -137,7 +147,9 @@
     <p class="note">"Auto" sets each shot's v₀ so the arc passes through the goal height at distance x:
       v₀ = √( g·x² / (2·cos²θ·(y₀ + x·tan θ − y)) ). Drag a shot's slider to override it. Wheel RPM = 60·v₀ / (efficiency·π·D).
       x is measured to the center of the red HIVE's upward CELL opening: back distance is from the C4/C5 tile seam (the opening center sits a few inches behind it, toward the HIVE), side distance is from the HIVE's center line.
-      The HIVE, frame and tiles follow the FTC BIOBUZZ competition manual (Figures 9-5, 9-8 to 9-11): pivot 43.95" up, 30° tilt, two 12.04"-deep hexagonal CELLS 18.84" apart with 20"×14" openings, up-CELL opening 53.5"–65.6" above the tiles (center ≈ 1.51 m).</p>
+      The HIVE, frame and tiles follow the FTC BIOBUZZ competition manual (Figures 9-5, 9-8 to 9-11): pivot 43.95" up, 30° tilt, two 12.04"-deep hexagonal CELLS 18.84" apart with 20"×14" openings, up-CELL opening 53.5"–65.6" above the tiles (center ≈ 1.51 m).
+      "Model" steps the ball (POLLEN 2.8" or NECTAR 3.6") along its arc: ✓ goes in = it crosses the opening with the whole ball inside the hexagon;
+      ✗ hits wall = it touches a CELL wall, the other HIVE, or the frame first (red ✕ in 3D); • misses = neither. Click the floor in the 3D view or the field map to add a launcher; click a launcher dot in 3D to jump to its slider.</p>
   </div>
 </main>
 
@@ -173,6 +185,7 @@ function params() {
     y0: parseFloat($("y0").value),
     yt: parseFloat($("yt").value),
     flip: $("flip").checked,
+    ballR: parseFloat($("ball").value) * 0.0254 / 2,
   };
 }
 
@@ -208,16 +221,10 @@ function compute(p) {
     const vReq = requiredV0(x, p);
     const auto = override[i] === null;
     const v = auto ? (isFinite(vReq) ? vReq : V_MAX) : override[i];
-    // Sample the arc from launch until it lands (y = 0), capped at 1.5× the goal distance.
-    const pts = [], maxD = Math.max(x * 1.5, 0.01), N = 150;
-    for (let j = 0; j <= N; j++) {
-      const d = maxD * j / N, y = height(d, v, p);
-      if (y < 0 && j > 0) break;
-      pts.push({ d, y });
-    }
+    const sim = simulate(sx, by, x, v, p);
     const label = s.added ? `Added ${s.n}` : `Shot ${i + 1}`;
     const color = s.added ? ADD_PALETTE[(s.n - 1) % ADD_PALETTE.length] : PALETTE[i % PALETTE.length];
-    return { ...s, i, label, sx, by, x, theta, vReq, v, auto, hAtGoal: height(x, v, p), pts, color };
+    return { ...s, i, label, sx, by, x, theta, vReq, v, auto, hAtGoal: height(x, v, p), sim, color };
   });
 }
 
@@ -229,6 +236,7 @@ function buildShotControls() {
         <span class="dot" id="dot${i}"></span>
         <strong id="lbl${i}"></strong>
         <span class="meta" id="meta${i}"></span>
+        <span class="st" id="st${i}"></span>
         <span class="tag" id="tag${i}"></span>
         ${s.added ? `<button class="rm" id="rm${i}" type="button" title="Remove this point">✕</button>` : ""}
       </div>
@@ -280,11 +288,17 @@ const HEX = [[0, 1], [1, .5], [1, -.5], [0, -1], [-1, -.5], [-1, .5]].map(([a, b
 const hiveToWorld = (hx, tip) => ([x, u, w]) => [hx + x, PIVOT_Y + u * Math.cos(tip) - w * Math.sin(tip), PIVOT_H + u * Math.sin(tip) + w * Math.cos(tip)];
 
 // One CELL: hexagonal tube from u0 (closed, inner end) to u1 (open, outer end).
-function cellTraces(toW, u0, u1, color, opacity) {
+function cellGeom(toW, u0, u1) {
   const ring = u => HEX.map(([x, w]) => toW([x, u, CELL_RISE + w]));
-  const V = [...ring(u0), ...ring(u1)], I = [], J = [], K = [];
-  for (let a = 0; a < 6; a++) { const b = (a + 1) % 6; I.push(a, a); J.push(b, b + 6); K.push(b + 6, a + 6); } // walls
-  for (let a = 1; a < 5; a++) { I.push(0); J.push(a); K.push(a + 1); }                                     // inner cap
+  const V = [...ring(u0), ...ring(u1)], T = [];
+  for (let a = 0; a < 6; a++) { const b = (a + 1) % 6; T.push([a, b, b + 6], [a, b + 6, a + 6]); } // walls
+  for (let a = 1; a < 5; a++) T.push([0, a, a + 1]);                                               // inner cap
+  return { V, T };
+}
+
+function cellTraces(toW, u0, u1, color, opacity) {
+  const { V, T } = cellGeom(toW, u0, u1);
+  const I = T.map(t => t[0]), J = T.map(t => t[1]), K = T.map(t => t[2]);
   const ex = [], ey = [], ez = [];
   const seg = (p, q) => { ex.push(p[0], q[0], null); ey.push(p[1], q[1], null); ez.push(p[2], q[2], null); };
   for (let a = 0; a < 6; a++) { seg(V[a], V[(a + 1) % 6]); seg(V[a + 6], V[(a + 1) % 6 + 6]); seg(V[a], V[a + 6]); }
@@ -319,8 +333,8 @@ function hiveTraces(frameColor, gridColor, bounds) {
 
   // Floor tiles (24") around the shots, with tile names; C5 highlighted.
   const col = i => FIELD_X + (i - 3) * TILE, row = j => PIVOT_Y + (j - 3) * TILE; // seam positions
-  const i0 = Math.max(0, Math.floor((bounds.x0 - FIELD_X) / TILE) + 3), i1 = Math.min(6, Math.ceil((bounds.x1 - FIELD_X) / TILE) + 3);
-  const j0 = Math.max(0, Math.floor((bounds.y0 - PIVOT_Y) / TILE) + 3), j1 = Math.min(6, Math.ceil((bounds.y1 - PIVOT_Y) / TILE) + 3);
+  const i0 = Math.max(0, Math.floor((bounds.x0 - FIELD_X) / TILE) + 2), i1 = Math.min(6, Math.ceil((bounds.x1 - FIELD_X) / TILE) + 4);
+  const j0 = Math.max(0, Math.floor((bounds.y0 - PIVOT_Y) / TILE) + 2), j1 = Math.min(6, Math.ceil((bounds.y1 - PIVOT_Y) / TILE) + 4);
   const gx = [], gy = [], gz = [];
   for (let i = i0; i <= i1; i++) { gx.push(col(i), col(i), null); gy.push(row(j0), row(j1), null); gz.push(0, 0, null); }
   for (let j = j0; j <= j1; j++) { gx.push(col(i0), col(i1), null); gy.push(row(j), row(j), null); gz.push(0, 0, null); }
@@ -338,6 +352,99 @@ function hiveTraces(frameColor, gridColor, bounds) {
   return out;
 }
 
+// ---- Collision model: does the ball go into the red upward CELL, hit a wall first, or miss? ----
+const vsub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const vdot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const vadd = (a, b, k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
+
+// Closest point on triangle abc to p (Ericson, Real-Time Collision Detection §5.1.5)
+function closestOnTri(p, a, b, c) {
+  const ab = vsub(b, a), ac = vsub(c, a), ap = vsub(p, a);
+  const d1 = vdot(ab, ap), d2 = vdot(ac, ap);
+  if (d1 <= 0 && d2 <= 0) return a;
+  const bp = vsub(p, b), d3 = vdot(ab, bp), d4 = vdot(ac, bp);
+  if (d3 >= 0 && d4 <= d3) return b;
+  const vc = d1 * d4 - d3 * d2;
+  if (vc <= 0 && d1 >= 0 && d3 <= 0) return vadd(a, ab, d1 / (d1 - d3));
+  const cp = vsub(p, c), d5 = vdot(ab, cp), d6 = vdot(ac, cp);
+  if (d6 >= 0 && d5 <= d6) return c;
+  const vb = d5 * d2 - d1 * d6;
+  if (vb <= 0 && d2 >= 0 && d6 <= 0) return vadd(a, ac, d2 / (d2 - d6));
+  const va = d3 * d6 - d5 * d4;
+  if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) return vadd(b, vsub(c, b), (d4 - d3) / ((d4 - d3) + (d5 - d6)));
+  const den = 1 / (va + vb + vc);
+  return vadd(vadd(a, ab, vb * den), ac, vc * den);
+}
+const dist2 = (a, b) => { const d = vsub(a, b); return vdot(d, d); };
+function segDist2(p, a, b) {
+  const ab = vsub(b, a), t = Math.max(0, Math.min(1, vdot(vsub(p, a), ab) / vdot(ab, ab)));
+  return dist2(p, vadd(a, ab, t));
+}
+
+const COLLIDERS = [];
+[[0, TIP, "the red HIVE's CELL wall"], [HIVE_SPACING, -TIP, "the blue HIVE"]].forEach(([hx, tip, name]) => {
+  for (const [u0, u1] of [[CELL_GAP / 2, U_OUT], [-CELL_GAP / 2, -U_OUT]]) {
+    const { V, T } = cellGeom(hiveToWorld(hx, tip), u0, u1);
+    const lo = [0, 1, 2].map(k => Math.min(...V.map(v => v[k]))), hi = [0, 1, 2].map(k => Math.max(...V.map(v => v[k])));
+    COLLIDERS.push({ name, tris: T.map(t => t.map(k => V[k])), lo, hi });
+  }
+});
+const FRAME_R = 1 * IN;
+const FRAME_SEGS = [];
+for (const x of [FIELD_X - FRAME.w / 2, FIELD_X + FRAME.w / 2])
+  for (const y of [PIVOT_Y - FRAME.d / 2, PIVOT_Y + FRAME.d / 2]) FRAME_SEGS.push([[x, y, 0], [x, PIVOT_Y, PIVOT_H]]);
+FRAME_SEGS.push([[FIELD_X - FRAME.w / 2, PIVOT_Y, PIVOT_H], [FIELD_X + FRAME.w / 2, PIVOT_Y, PIVOT_H]]);
+// The red upward CELL's opening: center, outward normal, and in-plane axes matching HEX.
+const OPEN = {
+  c: hiveToWorld(0, TIP)([0, U_OUT, CELL_RISE]),
+  n: [0, Math.cos(TIP), Math.sin(TIP)], e1: [1, 0, 0], e2: [0, -Math.sin(TIP), Math.cos(TIP)],
+};
+// Inside the hexagon by at least r (HEX is listed clockwise in (x, w)).
+function insideOpening(q, r) {
+  for (let a = 0; a < 6; a++) {
+    const A = HEX[a], B = HEX[(a + 1) % 6], ex = B[0] - A[0], ey = B[1] - A[1];
+    if (-(ex * (q[1] - A[1]) - ey * (q[0] - A[0])) / Math.hypot(ex, ey) < r) return false;
+  }
+  return true;
+}
+const STATUS = {
+  in: { short: "✓ goes in", long: "goes in" },
+  wall: { short: "✗ hits wall", long: "hits a wall" },
+  miss: { short: "• misses", long: "misses" },
+};
+
+// Step along the arc and stop at the first event. Returns { status, what, at, path: [{ d, P }] }.
+function simulate(sx, by, x, v, p) {
+  const ux = x ? -sx / x : 0, uy = x ? -by / x : 0, r = p.ballR, dd = 0.004, maxD = Math.max(2 * x, 0.5);
+  const at = d => [sx + ux * d, by + uy * d, height(d, v, p)];
+  const path = [];
+  let prev = null;
+  for (let d = 0; d <= maxD; d += dd) {
+    const P = at(d);
+    if (P[2] < 0) { path.push({ d, P: [P[0], P[1], 0] }); return { status: "miss", what: "lands on the floor", at: P, path }; }
+    if (prev) {
+      const s0 = vdot(vsub(prev, OPEN.c), OPEN.n), s1 = vdot(vsub(P, OPEN.c), OPEN.n);
+      if (s0 > 0 && s1 <= 0) {
+        const t = s0 / (s0 - s1), Q = vadd(prev, vsub(P, prev), t), rel = vsub(Q, OPEN.c);
+        if (insideOpening([vdot(rel, OPEN.e1), vdot(rel, OPEN.e2)], r)) {
+          path.push({ d: d - dd + t * dd, P: Q });
+          return { status: "in", what: "enters the CELL opening cleanly", at: Q, path };
+        }
+      }
+    }
+    for (const col of COLLIDERS) {
+      if (P[0] < col.lo[0] - r || P[0] > col.hi[0] + r || P[1] < col.lo[1] - r || P[1] > col.hi[1] + r || P[2] < col.lo[2] - r || P[2] > col.hi[2] + r) continue;
+      for (const [A, B, C] of col.tris)
+        if (dist2(P, closestOnTri(P, A, B, C)) < r * r) { path.push({ d, P }); return { status: "wall", what: "hits " + col.name, at: P, path }; }
+    }
+    for (const [A, B] of FRAME_SEGS)
+      if (segDist2(P, A, B) < (r + FRAME_R) ** 2) { path.push({ d, P }); return { status: "wall", what: "hits the HIVE frame", at: P, path }; }
+    path.push({ d, P });
+    prev = P;
+  }
+  return { status: "miss", what: "flies past", at: prev, path };
+}
+
 function render() {
   const p = params();
   const rows = compute(p);
@@ -349,6 +456,10 @@ function render() {
     if (document.activeElement !== sl) sl.value = r.v;
     $("vv" + r.i).textContent = fmtV(r.v);
     $("dot" + r.i).style.background = r.color;
+    const st = $("st" + r.i);
+    st.className = "st " + r.sim.status;
+    st.textContent = STATUS[r.sim.status].short;
+    st.title = r.sim.what;
     $("lbl" + r.i).textContent = r.label;
     $("meta" + r.i).textContent = `${r.back} back · ${r.side} ${r.dir}` + (r.added ? "" : ` · ${r.result} ${r.pct}%`);
     const tag = $("tag" + r.i);
@@ -361,25 +472,30 @@ function render() {
   const t3 = [];
   rows.forEach(r => {
     const ux = r.x ? -r.sx / r.x : 0, uy = r.x ? -r.by / r.x : 0; // unit vector launcher → goal
-    const arc = r.pts.filter(q => q.d < r.x).concat(r.hAtGoal >= 0 ? [{ d: r.x, y: r.hAtGoal }] : []);
     t3.push({
       type: "scatter3d", mode: "lines", name: r.label, legendgroup: "s" + r.i,
-      x: arc.map(q => r.sx + ux * q.d), y: arc.map(q => r.by + uy * q.d), z: arc.map(q => q.y),
+      x: r.sim.path.map(q => q.P[0]), y: r.sim.path.map(q => q.P[1]), z: r.sim.path.map(q => q.P[2]),
       line: { color: r.color, width: 6 },
       hovertemplate: `${r.label} · v₀ ${fmtV(r.v)}<br>height %{z:.2f} m<extra></extra>`,
     });
     t3.push({
       type: "scatter3d", mode: "markers", showlegend: false, legendgroup: "s" + r.i,
-      x: [r.sx], y: [r.by], z: [p.y0], marker: { size: 6, color: r.color },
-      hovertemplate: `${r.label}: ${r.back} back, ${r.side} ${r.dir}<br>v₀ ${fmtV(r.v)}${r.added ? "" : `<br>${r.result} ${r.pct}%`}<extra></extra>`,
+      x: [r.sx], y: [r.by], z: [p.y0], marker: { size: 6, color: r.color }, customdata: [r.i],
+      hovertemplate: `${r.label}: ${r.back} back, ${r.side} ${r.dir}<br>v₀ ${fmtV(r.v)} · ${STATUS[r.sim.status].long}${r.added ? "" : `<br>${r.result} ${r.pct}%`}<extra></extra>`,
     });
     // dashed ground track from launcher to goal
     t3.push({ type: "scatter3d", mode: "lines", showlegend: false, legendgroup: "s" + r.i, hoverinfo: "skip",
       x: [r.sx, 0], y: [r.by, 0], z: [0, 0], line: { color: r.color, width: 2, dash: "dash" }, opacity: 0.5 });
   });
+  const hits = rows.filter(r => r.sim.status === "wall");
+  if (hits.length) t3.push({ type: "scatter3d", mode: "markers", name: "Hits wall", x: hits.map(r => r.sim.at[0]), y: hits.map(r => r.sim.at[1]),
+    z: hits.map(r => r.sim.at[2]), marker: { size: 7, color: "#ff3b30", symbol: "x" }, text: hits.map(r => `${r.label} ${r.sim.what}`),
+    hovertemplate: "%{text}<extra></extra>" });
   const bx = rows.map(r => r.sx).concat([FIELD_X - FRAME.w / 2, FIELD_X + FRAME.w / 2]);
   const byy = rows.map(r => r.by).concat([PIVOT_Y - FRAME.d / 2, PIVOT_Y + FRAME.d / 2]);
-  t3.push(...hiveTraces(muted, grid, { x0: Math.min(...bx), x1: Math.max(...bx), y0: Math.min(...byy), y1: Math.max(...byy) }));
+  const bounds = { x0: Math.min(...bx), x1: Math.max(...bx), y0: Math.min(...byy), y1: Math.max(...byy) };
+  t3.push(floorTrace(bounds));
+  t3.push(...hiveTraces(muted, grid, bounds));
   t3.push({ type: "scatter3d", mode: "markers", name: "Goal", x: [0], y: [0], z: [p.yt],
     marker: { size: 4, color: "#ffd43b", symbol: "diamond" }, hovertemplate: `Goal (CELL opening)<br>height ${p.yt} m<extra></extra>` });
   const ax = title => ({ title, gridcolor: grid, zerolinecolor: grid, color: muted, backgroundcolor: "rgba(0,0,0,0)" });
@@ -397,7 +513,7 @@ function render() {
 
   // ---- 2D side view ----
   const t2 = rows.map(r => ({
-    type: "scatter", mode: "lines", name: r.label, x: r.pts.map(q => q.d), y: r.pts.map(q => q.y),
+    type: "scatter", mode: "lines", name: r.label, x: r.sim.path.map(q => q.d), y: r.sim.path.map(q => q.P[2]),
     line: { color: r.color, width: 2.5 }, hovertemplate: `${r.label}<br>%{x:.2f} m, %{y:.2f} m<extra></extra>`,
   }));
   t2.push({ type: "scatter", mode: "markers", name: "Goal", x: rows.map(r => r.x), y: rows.map(() => p.yt),
@@ -413,13 +529,13 @@ function render() {
   // ---- table ----
   const tol = 0.05; // m
   $("tbl").innerHTML = `<tr><th class="l">Shot</th><th>Back</th><th>Side</th><th class="l">Dir</th><th class="l">Result</th>
-    <th>x (m)</th><th>θ (°)</th><th>From goal (°)</th><th>Auto v₀ (${vLabel()})</th><th>Used v₀ (${vLabel()})</th><th>Height at goal (m)</th></tr>` +
+    <th>x (m)</th><th>θ (°)</th><th>From goal (°)</th><th>Auto v₀ (${vLabel()})</th><th>Used v₀ (${vLabel()})</th><th class="l">Model</th><th>Height at goal (m)</th></tr>` +
     rows.map(r => {
       const dh = r.hAtGoal - p.yt;
       return `<tr><td><span class="dot" style="background:${r.color};margin-right:6px"></span>${r.label}</td>
         <td>${r.back}</td><td>${r.side}</td><td class="l">${r.dir}</td><td class="l">${r.added ? "—" : `${r.result} ${r.pct}%`}</td>
         <td>${fmt(r.x)}</td><td>${fmt(r.theta, 1)}</td><td>${fmt(90 - r.theta, 1)}</td>
-        <td>${isFinite(r.vReq) ? fmtVn(r.vReq) : "unreachable"}</td><td>${fmtVn(r.v)}</td>
+        <td>${isFinite(r.vReq) ? fmtVn(r.vReq) : "unreachable"}</td><td>${fmtVn(r.v)}</td><td class="l st ${r.sim.status}" title="${r.sim.what}">${STATUS[r.sim.status].short}</td>
         <td class="${Math.abs(dh) <= tol ? "hit" : "miss"}">${fmt(r.hAtGoal)} (${dh >= 0 ? "+" : ""}${fmt(dh)})</td></tr>`;
     }).join("");
 }
@@ -448,7 +564,7 @@ function renderMap(rows, muted, grid, font) {
     ...rows.map(r => ({ type: "scatter", mode: "lines", x: [r.sx, 0], y: [r.by, 0], line: { color: r.color, width: 1, dash: "dot" }, hoverinfo: "skip" })),
     { type: "scatter", mode: "markers", x: rows.map(r => r.sx), y: rows.map(r => r.by),
       marker: { size: rows.map(r => r.added ? 10 : 8), color: rows.map(r => r.color), symbol: rows.map(r => r.added ? "star" : "circle"),
-                line: { color: "#000", width: 0.5 } }, hoverinfo: "skip" },
+                line: { color: rows.map(r => ({ in: "#2f9e44", wall: "#ff3b30", miss: "#e8a200" })[r.sim.status]), width: 2 } }, hoverinfo: "skip" },
     { type: "scatter", mode: "markers", x: [0], y: [0], marker: { size: 9, color: "#ffd43b", symbol: "diamond" }, hoverinfo: "skip" },
   ];
   const pad = 2 * IN;
@@ -458,6 +574,63 @@ function renderMap(rows, muted, grid, font) {
     yaxis: { range: [row(0) - pad, row(6) + pad], visible: false, fixedrange: true, scaleanchor: "x" },
     shapes,
   }, { staticPlot: true, responsive: true });
+}
+
+// A near-invisible floor surface over the whole field (1" grid) so the 3D view can be clicked and hovered.
+let FLOOR = null, FLOOR_KEY = "";
+function floorTrace(b) {
+  // Whole tiles around everything drawn, plus one tile of margin, clamped to the field.
+  const i0 = Math.max(0, Math.floor((b.x0 - FIELD_X) / TILE) + 2), i1 = Math.min(6, Math.ceil((b.x1 - FIELD_X) / TILE) + 4);
+  const j0 = Math.max(0, Math.floor((b.y0 - PIVOT_Y) / TILE) + 2), j1 = Math.min(6, Math.ceil((b.y1 - PIVOT_Y) / TILE) + 4);
+  const key = [i0, i1, j0, j1].join();
+  if (key !== FLOOR_KEY) {
+    FLOOR_KEY = key;
+    const xs = [], ys = [];
+    for (let k = 0; k <= (i1 - i0) * 24; k++) xs.push(FIELD_X + (i0 - 3) * TILE + k * IN);
+    for (let k = 0; k <= (j1 - j0) * 24; k++) ys.push(PIVOT_Y + (j0 - 3) * TILE + k * IN);
+    FLOOR = { type: "surface", name: "floor", x: xs, y: ys, z: ys.map(() => xs.map(() => -0.003)),
+      showscale: false, opacity: 0.06, colorscale: [[0, "#888"], [1, "#888"]], hoverinfo: "none",
+      contours: { x: { highlight: false }, y: { highlight: false }, z: { highlight: false } }, showlegend: false };
+  }
+  return FLOOR;
+}
+function describePoint(wx, wy) {
+  const p = params(), x = Math.hypot(wx, wy), v = requiredV0(x, p);
+  const side = Math.abs(wx) / p.k, dir = side < 1e-6 ? "" : wx * (p.flip ? -1 : 1) > 0 ? " left" : " right";
+  const out = isFinite(v) ? STATUS[simulate(wx, wy, x, v, p).status].short : "";
+  return `${((wy - SEAM_Y) / p.k).toFixed(1)} back · ${side.toFixed(1)}${dir} (${$("units").selectedOptions[0].text}) → ${isFinite(v) ? fmtV(v) : "unreachable"} ${out}`;
+}
+function hook3d() {
+  // Plotly's 3D click event is unreliable, so remember what's under the cursor (from hover)
+  // and treat a press + release without dragging as a click on it.
+  const gd = $("p3d");
+  let under = null, down = null;
+  gd.on("plotly_hover", ev => {
+    const pt = ev.points && ev.points[0];
+    if (!pt) return;
+    if (pt.data.name === "floor") {
+      under = { floor: [pt.x, pt.y] };
+      $("hover3d").style.display = "block";
+      $("hover3d").textContent = "Click to add: " + describePoint(pt.x, pt.y);
+    } else {
+      under = pt.data.customdata ? { shot: pt.data.customdata[0] } : null;
+      $("hover3d").style.display = "none";
+    }
+  });
+  gd.on("plotly_unhover", () => { under = null; $("hover3d").style.display = "none"; });
+  gd.addEventListener("pointerdown", e => { down = [e.clientX, e.clientY]; }, true);
+  gd.addEventListener("pointerup", e => {
+    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4 || !under) return;
+    down = null;
+    if (under.floor) addShot(under.floor[0], under.floor[1]);
+    else if (under.shot !== undefined) {
+      const el = $("shot" + under.shot);
+      if (!el) return;
+      if ($("panel").classList.contains("collapsed")) $("collapse").click();
+      el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1200);
+    }
+  }, true);
 }
 
 // Click on the map → world coordinates → new launcher point.
@@ -475,7 +648,8 @@ $("pmap").addEventListener("mousemove", e => {
   if (!q) { $("maphint").textContent = "Click anywhere on the field to drop a launcher there."; return; }
   const u = $("units").selectedOptions[0].text, x = Math.hypot(q[0], q[1]), v = requiredV0(x, p);
   const side = Math.abs(q[0]) / p.k, dir = side < 1e-6 ? "" : q[0] * (p.flip ? -1 : 1) > 0 ? " left" : " right";
-  $("maphint").textContent = `${((q[1] - SEAM_Y) / p.k).toFixed(1)} back · ${side.toFixed(1)}${dir} (${u}) → ${isFinite(v) ? fmtV(v) : "unreachable"}`;
+  const out = isFinite(v) ? STATUS[simulate(q[0], q[1], x, v, p).status].short : "";
+  $("maphint").textContent = `${((q[1] - SEAM_Y) / p.k).toFixed(1)} back · ${side.toFixed(1)}${dir} (${u}) → ${isFinite(v) ? fmtV(v) : "unreachable"} ${out}`;
 });
 $("clearAdded").addEventListener("click", () => {
   for (let i = shots.length - 1; i >= 0; i--) if (shots[i].added) { shots.splice(i, 1); override.splice(i, 1); }
@@ -483,7 +657,7 @@ $("clearAdded").addEventListener("click", () => {
 });
 
 buildShotControls();
-["units", "theta", "g", "y0", "yt", "vunit", "wd", "eff", "flip"].forEach(id => $(id).addEventListener("input", render));
+["units", "theta", "g", "y0", "yt", "vunit", "wd", "eff", "flip", "ball"].forEach(id => $(id).addEventListener("input", render));
 $("autoAll").addEventListener("click", () => { override.fill(null); render(); });
 $("collapse").addEventListener("click", () => {
   const c = $("panel").classList.toggle("collapsed");
@@ -492,6 +666,7 @@ $("collapse").addEventListener("click", () => {
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
 addEventListener("resize", () => Plotly.relayout("p3d", { "margin.r": innerWidth <= 700 ? 0 : 360 }));
 render();
+hook3d();
 </script>
 </body>
 </html>
