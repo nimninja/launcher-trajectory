@@ -58,6 +58,9 @@
   .tag { font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px solid var(--border); color: var(--muted); }
   .tag.auto { color: var(--good); border-color: var(--good); }
   .tag.btn { cursor: pointer; }
+  #pmap { width: 100%; height: 310px; cursor: crosshair; }
+  .maphint { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .rm { padding: 0 6px; font-size: 12px; line-height: 18px; }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
   .hit { color: var(--good); } .miss { color: var(--bad); }
 
@@ -116,6 +119,9 @@
       </div>
       <label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-top:8px">
         <input id="flip" type="checkbox"> Flip left/right ("left" = toward column B)</label>
+      <h3>Field map · click to add a shot <button id="clearAdded" type="button">Clear added</button></h3>
+      <div id="pmap"></div>
+      <div class="maphint" id="maphint">Click anywhere on the field to drop a launcher there.</div>
       <h3>Launch speed v₀ per shot <button id="autoAll" type="button">All → auto</button></h3>
       <div id="shots"></div>
     </div>
@@ -146,8 +152,14 @@ const SHOTS = [
   { back: 32, side: 12, dir: "right",  result: "yes", pct: 85 },
 ];
 const PALETTE = ["#2a6fdb", "#e8590c", "#2f9e44", "#ae3ec9", "#f08c00", "#0c8599", "#c2255c"];
+const ADD_PALETTE = ["#fcc419", "#22b8cf", "#f06595", "#94d82d", "#9775fa", "#ff922b"];
 const V_MIN = 0.5, V_MAX = 15;
-const override = SHOTS.map(() => null); // null = auto (hit the goal)
+// Clicked points are stored in world meters ({ added: true, n, wx, wy }) so they stay put when units change.
+const shots = SHOTS.map(s => ({ ...s }));
+let addedCount = 0;
+try { (JSON.parse(localStorage.getItem("lt-added")) || []).forEach(a => shots.push({ added: true, n: ++addedCount, wx: a.wx, wy: a.wy })); } catch {}
+const override = shots.map(() => null); // null = auto (hit the goal)
+const saveAdded = () => { try { localStorage.setItem("lt-added", JSON.stringify(shots.filter(s => s.added).map(({ wx, wy }) => ({ wx, wy })))); } catch {} };
 
 const $ = id => document.getElementById(id);
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -179,11 +191,18 @@ function requiredV0(x, p) {
 }
 
 function compute(p) {
-  return SHOTS.map((s, i) => {
+  return shots.map((s0, i) => {
     // Side is measured from the red HIVE's center line. Facing the HIVE from C5, your left is toward column D (+X).
-    const sign = (s.dir === "left" ? 1 : s.dir === "right" ? -1 : 0) * (p.flip ? -1 : 1);
-    const sx = sign * s.side * p.k;                                                 // lateral (m)
-    const by = SEAM_Y + s.back * p.k;                                               // back is from the C4/C5 seam
+    const lr = p.flip ? -1 : 1;
+    let s = s0, sx, by;
+    if (s0.added) {
+      sx = s0.wx; by = s0.wy;
+      const side = Math.abs(sx) / p.k, dir = Math.abs(sx) < 1e-6 ? "middle" : sx * lr > 0 ? "left" : "right";
+      s = { ...s0, back: +((by - SEAM_Y) / p.k).toFixed(1), side: +side.toFixed(1), dir, result: "clicked", pct: null };
+    } else {
+      sx = (s.dir === "left" ? 1 : s.dir === "right" ? -1 : 0) * lr * s.side * p.k; // lateral (m)
+      by = SEAM_Y + s.back * p.k;                                                    // back is from the C4/C5 seam
+    }
     const x = Math.hypot(sx, by);
     const theta = s.side ? Math.atan(s.back / s.side) * 180 / Math.PI : NaN;
     const vReq = requiredV0(x, p);
@@ -196,29 +215,42 @@ function compute(p) {
       if (y < 0 && j > 0) break;
       pts.push({ d, y });
     }
-    return { ...s, i, sx, by, x, theta, vReq, v, auto, hAtGoal: height(x, v, p), pts, color: PALETTE[i % PALETTE.length] };
+    const label = s.added ? `Added ${s.n}` : `Shot ${i + 1}`;
+    const color = s.added ? ADD_PALETTE[(s.n - 1) % ADD_PALETTE.length] : PALETTE[i % PALETTE.length];
+    return { ...s, i, label, sx, by, x, theta, vReq, v, auto, hAtGoal: height(x, v, p), pts, color };
   });
 }
 
 // ---- per-shot slider panel (built once, values refreshed on render) ----
 function buildShotControls() {
-  $("shots").innerHTML = SHOTS.map((s, i) => `
-    <div class="shot">
+  $("shots").innerHTML = shots.map((s, i) => `
+    <div class="shot" id="shot${i}">
       <div class="row1">
-        <span class="dot" style="background:${PALETTE[i]}"></span>
-        <strong>Shot ${i + 1}</strong>
-        <span class="meta">${s.back} back · ${s.side} ${s.dir} · ${s.result} ${s.pct}%</span>
+        <span class="dot" id="dot${i}"></span>
+        <strong id="lbl${i}"></strong>
+        <span class="meta" id="meta${i}"></span>
         <span class="tag" id="tag${i}"></span>
+        ${s.added ? `<button class="rm" id="rm${i}" type="button" title="Remove this point">✕</button>` : ""}
       </div>
       <div class="row2">
         <input type="range" id="v${i}" min="${V_MIN}" max="${V_MAX}" step="0.01" aria-label="Shot ${i + 1} v0">
         <span class="val" id="vv${i}"></span>
       </div>
     </div>`).join("");
-  SHOTS.forEach((_, i) => {
+  shots.forEach((s, i) => {
     $("v" + i).addEventListener("input", e => { override[i] = parseFloat(e.target.value); render(); });
     $("tag" + i).addEventListener("click", () => { if (override[i] !== null) { override[i] = null; render(); } });
+    if (s.added) $("rm" + i).addEventListener("click", () => { shots.splice(i, 1); override.splice(i, 1); saveAdded(); buildShotControls(); render(); });
   });
+}
+
+function addShot(wx, wy) {
+  shots.push({ added: true, n: ++addedCount, wx, wy });
+  override.push(null);
+  saveAdded();
+  buildShotControls();
+  render();
+  $("shot" + (shots.length - 1)).scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 // ---- FTC BIOBUZZ HIVE + field (2026-27 competition manual §9.4–9.6, Figures 9-5, 9-8 to 9-11) ----
@@ -316,6 +348,9 @@ function render() {
     const sl = $("v" + r.i);
     if (document.activeElement !== sl) sl.value = r.v;
     $("vv" + r.i).textContent = fmtV(r.v);
+    $("dot" + r.i).style.background = r.color;
+    $("lbl" + r.i).textContent = r.label;
+    $("meta" + r.i).textContent = `${r.back} back · ${r.side} ${r.dir}` + (r.added ? "" : ` · ${r.result} ${r.pct}%`);
     const tag = $("tag" + r.i);
     tag.className = "tag " + (r.auto ? "auto" : "btn");
     tag.textContent = r.auto ? (isFinite(r.vReq) ? "auto" : "unreachable") : "reset";
@@ -328,15 +363,15 @@ function render() {
     const ux = r.x ? -r.sx / r.x : 0, uy = r.x ? -r.by / r.x : 0; // unit vector launcher → goal
     const arc = r.pts.filter(q => q.d < r.x).concat(r.hAtGoal >= 0 ? [{ d: r.x, y: r.hAtGoal }] : []);
     t3.push({
-      type: "scatter3d", mode: "lines", name: `Shot ${r.i + 1}`, legendgroup: "s" + r.i,
+      type: "scatter3d", mode: "lines", name: r.label, legendgroup: "s" + r.i,
       x: arc.map(q => r.sx + ux * q.d), y: arc.map(q => r.by + uy * q.d), z: arc.map(q => q.y),
       line: { color: r.color, width: 6 },
-      hovertemplate: `Shot ${r.i + 1} · v₀ ${fmtV(r.v)}<br>height %{z:.2f} m<extra></extra>`,
+      hovertemplate: `${r.label} · v₀ ${fmtV(r.v)}<br>height %{z:.2f} m<extra></extra>`,
     });
     t3.push({
       type: "scatter3d", mode: "markers", showlegend: false, legendgroup: "s" + r.i,
       x: [r.sx], y: [r.by], z: [p.y0], marker: { size: 6, color: r.color },
-      hovertemplate: `Shot ${r.i + 1}: ${r.back} back, ${r.side} ${r.dir}<br>${r.result} ${r.pct}%<extra></extra>`,
+      hovertemplate: `${r.label}: ${r.back} back, ${r.side} ${r.dir}<br>v₀ ${fmtV(r.v)}${r.added ? "" : `<br>${r.result} ${r.pct}%`}<extra></extra>`,
     });
     // dashed ground track from launcher to goal
     t3.push({ type: "scatter3d", mode: "lines", showlegend: false, legendgroup: "s" + r.i, hoverinfo: "skip",
@@ -357,10 +392,13 @@ function render() {
              aspectmode: "data", camera: { eye: { x: 1.3, y: 1.5, z: 0.8 } } },
   }, { responsive: true, displaylogo: false });
 
+  // ---- top-down field map (click to add) ----
+  renderMap(rows, muted, grid, font);
+
   // ---- 2D side view ----
   const t2 = rows.map(r => ({
-    type: "scatter", mode: "lines", name: `Shot ${r.i + 1}`, x: r.pts.map(q => q.d), y: r.pts.map(q => q.y),
-    line: { color: r.color, width: 2.5 }, hovertemplate: `Shot ${r.i + 1}<br>%{x:.2f} m, %{y:.2f} m<extra></extra>`,
+    type: "scatter", mode: "lines", name: r.label, x: r.pts.map(q => q.d), y: r.pts.map(q => q.y),
+    line: { color: r.color, width: 2.5 }, hovertemplate: `${r.label}<br>%{x:.2f} m, %{y:.2f} m<extra></extra>`,
   }));
   t2.push({ type: "scatter", mode: "markers", name: "Goal", x: rows.map(r => r.x), y: rows.map(() => p.yt),
     marker: { size: 11, symbol: "diamond", color: rows.map(r => r.color) }, hovertemplate: "goal at %{x:.2f} m<extra></extra>" });
@@ -378,13 +416,71 @@ function render() {
     <th>x (m)</th><th>θ (°)</th><th>From goal (°)</th><th>Auto v₀ (${vLabel()})</th><th>Used v₀ (${vLabel()})</th><th>Height at goal (m)</th></tr>` +
     rows.map(r => {
       const dh = r.hAtGoal - p.yt;
-      return `<tr><td><span class="dot" style="background:${r.color};margin-right:6px"></span>${r.i + 1}</td>
-        <td>${r.back}</td><td>${r.side}</td><td class="l">${r.dir}</td><td class="l">${r.result} ${r.pct}%</td>
+      return `<tr><td><span class="dot" style="background:${r.color};margin-right:6px"></span>${r.label}</td>
+        <td>${r.back}</td><td>${r.side}</td><td class="l">${r.dir}</td><td class="l">${r.added ? "—" : `${r.result} ${r.pct}%`}</td>
         <td>${fmt(r.x)}</td><td>${fmt(r.theta, 1)}</td><td>${fmt(90 - r.theta, 1)}</td>
         <td>${isFinite(r.vReq) ? fmtVn(r.vReq) : "unreachable"}</td><td>${fmtVn(r.v)}</td>
         <td class="${Math.abs(dh) <= tol ? "hit" : "miss"}">${fmt(r.hAtGoal)} (${dh >= 0 ? "+" : ""}${fmt(dh)})</td></tr>`;
     }).join("");
 }
+
+function renderMap(rows, muted, grid, font) {
+  const col = i => FIELD_X + (i - 3) * TILE, row = j => PIVOT_Y + (j - 3) * TILE;
+  const shapes = [];
+  for (let i = 0; i <= 6; i++) shapes.push({ type: "line", x0: col(i), x1: col(i), y0: row(0), y1: row(6), line: { color: grid, width: 1 } });
+  for (let j = 0; j <= 6; j++) shapes.push({ type: "line", x0: col(0), x1: col(6), y0: row(j), y1: row(j), line: { color: grid, width: 1 } });
+  shapes.push({ type: "rect", x0: col(2), x1: col(3), y0: row(4), y1: row(5), fillcolor: "rgba(242,183,5,.15)", line: { width: 0 } });
+  // HIVE footprints (CELLS seen from above) and frame
+  [[0, TIP, "#e03131"], [HIVE_SPACING, -TIP, "#1c7ed6"]].forEach(([hx, tip, c]) => {
+    for (const [u0, u1] of [[CELL_GAP / 2, U_OUT], [-CELL_GAP / 2, -U_OUT]]) {
+      const ys = [u0, u1].flatMap(u => [-1, 1].map(w => hiveToWorld(hx, tip)([0, u, CELL_RISE + w * HEX_H / 2])[1]));
+      shapes.push({ type: "rect", x0: hx - HEX_W / 2, x1: hx + HEX_W / 2, y0: Math.min(...ys), y1: Math.max(...ys),
+        fillcolor: c, opacity: 0.35, line: { color: c, width: 1 } });
+    }
+  });
+  shapes.push({ type: "rect", x0: FIELD_X - FRAME.w / 2, x1: FIELD_X + FRAME.w / 2, y0: PIVOT_Y - FRAME.d / 2, y1: PIVOT_Y + FRAME.d / 2,
+    line: { color: muted, width: 1, dash: "dot" } });
+  shapes.push({ type: "line", x0: col(0), x1: col(6), y0: SEAM_Y, y1: SEAM_Y, line: { color: "#f2b705", width: 2 } });
+  const lx = [], ly = [], lt = [];
+  for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) { lx.push(col(i) + TILE / 2); ly.push(row(j) + TILE / 2); lt.push("ABCDEF"[i] + (j + 1)); }
+  const traces = [
+    { type: "scatter", mode: "text", x: lx, y: ly, text: lt, textfont: { color: muted, size: 9 }, hoverinfo: "skip" },
+    ...rows.map(r => ({ type: "scatter", mode: "lines", x: [r.sx, 0], y: [r.by, 0], line: { color: r.color, width: 1, dash: "dot" }, hoverinfo: "skip" })),
+    { type: "scatter", mode: "markers", x: rows.map(r => r.sx), y: rows.map(r => r.by),
+      marker: { size: rows.map(r => r.added ? 10 : 8), color: rows.map(r => r.color), symbol: rows.map(r => r.added ? "star" : "circle"),
+                line: { color: "#000", width: 0.5 } }, hoverinfo: "skip" },
+    { type: "scatter", mode: "markers", x: [0], y: [0], marker: { size: 9, color: "#ffd43b", symbol: "diamond" }, hoverinfo: "skip" },
+  ];
+  const pad = 2 * IN;
+  Plotly.react("pmap", traces, {
+    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font, margin: { l: 4, r: 4, t: 4, b: 4 }, showlegend: false,
+    xaxis: { range: [col(0) - pad, col(6) + pad], visible: false, fixedrange: true },
+    yaxis: { range: [row(0) - pad, row(6) + pad], visible: false, fixedrange: true, scaleanchor: "x" },
+    shapes,
+  }, { staticPlot: true, responsive: true });
+}
+
+// Click on the map → world coordinates → new launcher point.
+const mapPoint = e => {
+  const gd = $("pmap"), fl = gd._fullLayout;
+  if (!fl || !fl.xaxis) return null;
+  const xa = fl.xaxis, ya = fl.yaxis, b = gd.getBoundingClientRect();
+  const px = e.clientX - b.left - xa._offset, py = e.clientY - b.top - ya._offset;
+  if (px < 0 || py < 0 || px > xa._length || py > ya._length) return null;
+  return [xa.p2l(px), ya.p2l(py)];
+};
+$("pmap").addEventListener("click", e => { const q = mapPoint(e); if (q) addShot(q[0], q[1]); });
+$("pmap").addEventListener("mousemove", e => {
+  const q = mapPoint(e), p = params();
+  if (!q) { $("maphint").textContent = "Click anywhere on the field to drop a launcher there."; return; }
+  const u = $("units").selectedOptions[0].text, x = Math.hypot(q[0], q[1]), v = requiredV0(x, p);
+  const side = Math.abs(q[0]) / p.k, dir = side < 1e-6 ? "" : q[0] * (p.flip ? -1 : 1) > 0 ? " left" : " right";
+  $("maphint").textContent = `${((q[1] - SEAM_Y) / p.k).toFixed(1)} back · ${side.toFixed(1)}${dir} (${u}) → ${isFinite(v) ? fmtV(v) : "unreachable"}`;
+});
+$("clearAdded").addEventListener("click", () => {
+  for (let i = shots.length - 1; i >= 0; i--) if (shots[i].added) { shots.splice(i, 1); override.splice(i, 1); }
+  addedCount = 0; saveAdded(); buildShotControls(); render();
+});
 
 buildShotControls();
 ["units", "theta", "g", "y0", "yt", "vunit", "wd", "eff", "flip"].forEach(id => $(id).addEventListener("input", render));
