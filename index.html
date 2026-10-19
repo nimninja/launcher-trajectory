@@ -559,7 +559,8 @@ function render() {
     z: hits.map(r => r.sim.at[2]), marker: { size: 7, color: "#ff3b30", symbol: "x" }, text: hits.map(r => `${r.label} ${r.sim.what}`),
     hovertemplate: "%{text}<extra></extra>" });
   const bx = rows.map(r => r.sx).concat([FIELD_X - FRAME.w / 2, FIELD_X + FRAME.w / 2]);
-  const byy = rows.map(r => r.by).concat([PIVOT_Y - FRAME.d / 2, PIVOT_Y + FRAME.d / 2]);
+  // Always include the shooting tiles (row 5, plus the one-tile margin = row 6) even with no shots.
+  const byy = rows.map(r => r.by).concat([PIVOT_Y - FRAME.d / 2, PIVOT_Y + 2 * TILE - 0.01]);
   const bounds = { x0: Math.min(...bx), x1: Math.max(...bx), y0: Math.min(...byy), y1: Math.max(...byy) };
   t3.push(floorTrace(bounds));
   t3.push(...hiveTraces(muted, grid, bounds));
