@@ -105,7 +105,7 @@
         </div>
         <div><label class="f" for="theta">Angle θ (°)</label><input id="theta" type="number" value="70" step="1"></div>
         <div><label class="f" for="y0">Launch y₀ (m)</label><input id="y0" type="number" value="0.2" step="0.05"></div>
-        <div><label class="f" for="yt">Goal y (m)</label><input id="yt" type="number" value="1.2" step="0.05"></div>
+        <div><label class="f" for="yt">Goal y (m)</label><input id="yt" type="number" value="1.51" step="0.01"></div>
         <div><label class="f" for="g">g (m/s²)</label><input id="g" type="number" value="9.81" step="0.01"></div>
         <div>
           <label class="f" for="vunit">Show speed as</label>
@@ -114,6 +114,8 @@
         <div><label class="f" for="wd">Wheel diameter (mm)</label><input id="wd" type="number" value="72" step="1" min="1"></div>
         <div><label class="f" for="eff" title="Ball exit speed ÷ wheel surface speed. ~1 for two wheels, ~0.5 for one wheel against a hood.">Efficiency (0–1)</label><input id="eff" type="number" value="1" step="0.05" min="0.05" max="1"></div>
       </div>
+      <label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-top:8px">
+        <input id="flip" type="checkbox"> Flip left/right ("left" = toward column B)</label>
       <h3>Launch speed v₀ per shot <button id="autoAll" type="button">All → auto</button></h3>
       <div id="shots"></div>
     </div>
@@ -128,7 +130,8 @@
     <div class="tablewrap"><table id="tbl"></table></div>
     <p class="note">"Auto" sets each shot's v₀ so the arc passes through the goal height at distance x:
       v₀ = √( g·x² / (2·cos²θ·(y₀ + x·tan θ − y)) ). Drag a shot's slider to override it. Wheel RPM = 60·v₀ / (efficiency·π·D).
-      Left side is drawn at negative X, right at positive X; the goal sits at the origin. The 3D target is an approximate FTC BIOBUZZ HIVE (red = yours, faded blue = the other alliance's), built from the competition manual's dimensions with the upward CELL's opening placed at the goal height.</p>
+      x is measured to the center of the red HIVE's upward CELL opening: back distance is from the C4/C5 tile seam (the opening center sits a few inches behind it, toward the HIVE), side distance is from the HIVE's center line.
+      The HIVE, frame and tiles follow the FTC BIOBUZZ competition manual (Figures 9-5, 9-8 to 9-11): pivot 43.95" up, 30° tilt, two 12.04"-deep hexagonal CELLS 18.84" apart with 20"×14" openings, up-CELL opening 53.5"–65.6" above the tiles (center ≈ 1.51 m).</p>
   </div>
 </main>
 
@@ -157,6 +160,7 @@ function params() {
     g: parseFloat($("g").value),
     y0: parseFloat($("y0").value),
     yt: parseFloat($("yt").value),
+    flip: $("flip").checked,
   };
 }
 
@@ -176,8 +180,10 @@ function requiredV0(x, p) {
 
 function compute(p) {
   return SHOTS.map((s, i) => {
-    const sx = (s.dir === "left" ? -1 : s.dir === "right" ? 1 : 0) * s.side * p.k; // lateral (m)
-    const by = s.back * p.k;                                                        // depth (m)
+    // Side is measured from the red HIVE's center line. Facing the HIVE from C5, your left is toward column D (+X).
+    const sign = (s.dir === "left" ? 1 : s.dir === "right" ? -1 : 0) * (p.flip ? -1 : 1);
+    const sx = sign * s.side * p.k;                                                 // lateral (m)
+    const by = SEAM_Y + s.back * p.k;                                               // back is from the C4/C5 seam
     const x = Math.hypot(sx, by);
     const theta = s.side ? Math.atan(s.back / s.side) * 180 / Math.PI : NaN;
     const vReq = requiredV0(x, p);
@@ -215,59 +221,88 @@ function buildShotControls() {
   });
 }
 
-// ---- FTC BIOBUZZ HIVE model (approximate, dimensions from the 2026-27 competition manual §9.6) ----
-// The upward CELL's opening is centered on the goal point (0, 0, goal height); shots come from +Y.
-const IN = 0.0254;
-const CELL = { w: 20 * IN, h: 14 * IN, d: 12 * IN };      // opening 20" wide × 14" tall, 12" deep
-const CELL_SPACING = 18.8 * IN;                            // between the two CELLS of a HIVE
-const FRAME = { w: 49.46 * IN, d: 38.95 * IN };            // A-frame base
-const ARM_DROP = 35 * Math.PI / 180;                       // how far the HIVE is tipped
+// ---- FTC BIOBUZZ HIVE + field (2026-27 competition manual §9.4–9.6, Figures 9-5, 9-8 to 9-11) ----
+// World axes (m): X = across the field (A → F), Y = along the rows (1 → 6), Z = up.
+// Origin (X, Y) is the center of the red HIVE's upward CELL opening, so every shot aims at (0, 0, goal height).
+// Shots stand on the C5 side (+Y) and back distance is measured from the C4/C5 tile seam.
+const IN = 0.0254, TILE = 24 * IN;
+const PIVOT_H = 43.95 * IN;                    // pivot axis above the tiles (Fig 9-8)
+const TIP = 30 * Math.PI / 180;                // HIVE tilt in a stable state (Fig 9-10)
+const CELL_LEN = 12.04 * IN;                   // CELL depth along the HIVE (Fig 9-9)
+const CELL_GAP = 18.84 * IN;                   // gap between the two CELLS (Fig 9-9) → 42.91" overall
+const HEX_W = 20 * IN, HEX_H = 14 * IN;        // CELL opening, hexagonal (§9.6.2)
+const HIVE_SPACING = 25.5 * IN;                // red ↔ blue HIVE center to center (Fig 9-10)
+const FRAME = { w: 49.46 * IN, d: 38.95 * IN };// A-frame footprint (Fig 9-8)
+const OPENING_MID = (53.5 + 65.6) / 2 * IN;    // up-CELL opening spans 53.5"–65.6" above tiles (Fig 9-10)
+const U_OUT = CELL_GAP / 2 + CELL_LEN;         // pivot → outer (open) end of a CELL, along the HIVE
+// How far the CELLS sit above the pivot line, solved so the opening matches Fig 9-10.
+const CELL_RISE = (OPENING_MID - PIVOT_H - U_OUT * Math.sin(TIP)) / Math.cos(TIP);
+// Horizontal distance from the pivot to the opening center; the pivot is on the row 3/4 seam (field center).
+const OPENING_Y = U_OUT * Math.cos(TIP) - CELL_RISE * Math.sin(TIP);
+const PIVOT_Y = -OPENING_Y;
+const SEAM_Y = PIVOT_Y + TILE;                 // C4/C5 seam: back distance = 0 here
+const FIELD_X = HIVE_SPACING / 2;              // field center line (C/D seam); red HIVE is on the C side
+const HEX = [[0, 1], [1, .5], [1, -.5], [0, -1], [-1, -.5], [-1, .5]].map(([a, b]) => [a * HEX_W / 2, b * HEX_H / 2]);
 
-// Open-top box (a CELL): local x∈±w/2, y∈±h/2, z∈[-d, 0] with the opening at z = 0,
-// rotated by `tilt` about the X axis and moved so the opening's center sits at `at`.
-function cellMesh(at, tilt, color, opacity, name) {
-  const { w, h, d } = CELL, c = Math.cos(tilt), sn = Math.sin(tilt);
-  const V = [];
-  for (const zz of [-d, 0]) for (const yy of [-h / 2, h / 2]) for (const xx of [-w / 2, w / 2])
-    V.push([at[0] + xx, at[1] + yy * c - zz * sn, at[2] + yy * sn + zz * c]);
-  // vertex index = xi + 2·yi + 4·zi ; faces: bottom + 4 walls (no lid)
-  const quads = [[0, 1, 3, 2], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]];
-  const I = [], J = [], K = [];
-  quads.forEach(([a, b, cc, dd]) => { I.push(a, a); J.push(b, cc); K.push(cc, dd); });
-  const edges = [[0,1],[1,3],[3,2],[2,0],[4,5],[5,7],[7,6],[6,4],[0,4],[1,5],[2,6],[3,7]];
+// HIVE-local (x across, u along the HIVE toward the up CELL, w up) → world, tipped by `tip` about the pivot.
+const hiveToWorld = (hx, tip) => ([x, u, w]) => [hx + x, PIVOT_Y + u * Math.cos(tip) - w * Math.sin(tip), PIVOT_H + u * Math.sin(tip) + w * Math.cos(tip)];
+
+// One CELL: hexagonal tube from u0 (closed, inner end) to u1 (open, outer end).
+function cellTraces(toW, u0, u1, color, opacity) {
+  const ring = u => HEX.map(([x, w]) => toW([x, u, CELL_RISE + w]));
+  const V = [...ring(u0), ...ring(u1)], I = [], J = [], K = [];
+  for (let a = 0; a < 6; a++) { const b = (a + 1) % 6; I.push(a, a); J.push(b, b + 6); K.push(b + 6, a + 6); } // walls
+  for (let a = 1; a < 5; a++) { I.push(0); J.push(a); K.push(a + 1); }                                     // inner cap
   const ex = [], ey = [], ez = [];
-  edges.forEach(([a, b]) => { ex.push(V[a][0], V[b][0], null); ey.push(V[a][1], V[b][1], null); ez.push(V[a][2], V[b][2], null); });
+  const seg = (p, q) => { ex.push(p[0], q[0], null); ey.push(p[1], q[1], null); ez.push(p[2], q[2], null); };
+  for (let a = 0; a < 6; a++) { seg(V[a], V[(a + 1) % 6]); seg(V[a + 6], V[(a + 1) % 6 + 6]); seg(V[a], V[a + 6]); }
   return [
     { type: "mesh3d", x: V.map(v => v[0]), y: V.map(v => v[1]), z: V.map(v => v[2]), i: I, j: J, k: K,
-      color, opacity, flatshading: true, name, showlegend: false, hoverinfo: "skip", legendgroup: "hive" },
+      color, opacity, flatshading: true, showlegend: false, hoverinfo: "skip", legendgroup: "hive" },
     { type: "scatter3d", mode: "lines", x: ex, y: ey, z: ez, line: { color, width: 3 },
       showlegend: false, hoverinfo: "skip", legendgroup: "hive" },
   ];
 }
 
-function hiveTraces(yt, frameColor) {
+function hiveTraces(frameColor, gridColor, bounds) {
   const out = [];
-  const addHive = (x0, color, opacity) => {
-    const up = [x0, 0, yt];                                      // upward CELL opening
-    const upCenter = [x0, 0, yt - CELL.d / 2];
-    const downCenter = [x0, -CELL_SPACING * Math.cos(ARM_DROP), upCenter[2] - CELL_SPACING * Math.sin(ARM_DROP)];
-    const tiltDown = Math.PI - ARM_DROP;                         // opening faces down and back
-    const down = [x0, downCenter[1] - Math.sin(tiltDown) * CELL.d / 2, downCenter[2] + Math.cos(tiltDown) * CELL.d / 2];
-    out.push(...cellMesh(up, 0, color, opacity, "HIVE"));
-    out.push(...cellMesh(down, tiltDown, color, opacity * 0.8, "HIVE"));
-    out.push({ type: "scatter3d", mode: "lines", x: [x0, x0], y: [upCenter[1], downCenter[1]], z: [upCenter[2], downCenter[2]],
-      line: { color: "#f2b705", width: 9 }, showlegend: false, hoverinfo: "skip", legendgroup: "hive" });
-    return [(upCenter[1] + downCenter[1]) / 2, (upCenter[2] + downCenter[2]) / 2]; // pivot (y, z)
+  const addHive = (hx, tip, color, opacity) => {
+    const toW = hiveToWorld(hx, tip);
+    out.push(...cellTraces(toW, CELL_GAP / 2, U_OUT, color, opacity));
+    out.push(...cellTraces(toW, -CELL_GAP / 2, -U_OUT, color, opacity));
+    const a = toW([0, -CELL_GAP / 2, CELL_RISE - HEX_H / 2]), b = toW([0, CELL_GAP / 2, CELL_RISE - HEX_H / 2]);
+    out.push({ type: "scatter3d", mode: "lines", x: [a[0], hx, b[0]], y: [a[1], PIVOT_Y, b[1]], z: [a[2], PIVOT_H, b[2]],
+      line: { color: "#9aa0a6", width: 7 }, showlegend: false, hoverinfo: "skip", legendgroup: "hive" });
   };
-  const [py, pz] = addHive(0, "#e03131", 0.45);                  // your HIVE
-  addHive(CELL.w + 4 * IN, "#1c7ed6", 0.2);                      // the other alliance's HIVE
-  // A-frames: triangles in the Y-Z plane at each end of the crossbar, apex at the pivot
-  const fx0 = (CELL.w + 4 * IN) / 2 - FRAME.w / 2, fx1 = fx0 + FRAME.w;
+  addHive(0, TIP, "#e03131", 0.45);                       // red: C4 CELL up, facing C5
+  addHive(HIVE_SPACING, -TIP, "#1c7ed6", 0.25);           // blue, shown in its other stable state
+  // A-frames (triangles in Y-Z at each end) + crossbar along the pivot axis
   const fx = [], fy = [], fz = [];
-  for (const x of [fx0, fx1]) fx.push(x, x, x, x, null), fy.push(py - FRAME.d / 2, py, py + FRAME.d / 2, py - FRAME.d / 2, null), fz.push(0, pz, 0, 0, null);
-  fx.push(fx0, fx1); fy.push(py, py); fz.push(pz, pz);           // crossbar
+  for (const x of [FIELD_X - FRAME.w / 2, FIELD_X + FRAME.w / 2]) {
+    fx.push(x, x, x, x, null); fy.push(PIVOT_Y - FRAME.d / 2, PIVOT_Y, PIVOT_Y + FRAME.d / 2, PIVOT_Y - FRAME.d / 2, null); fz.push(0, PIVOT_H, 0, 0, null);
+  }
+  fx.push(FIELD_X - FRAME.w / 2, FIELD_X + FRAME.w / 2); fy.push(PIVOT_Y, PIVOT_Y); fz.push(PIVOT_H, PIVOT_H);
   out.push({ type: "scatter3d", mode: "lines", name: "HIVE", x: fx, y: fy, z: fz,
     line: { color: frameColor, width: 5 }, hoverinfo: "skip", legendgroup: "hive" });
+
+  // Floor tiles (24") around the shots, with tile names; C5 highlighted.
+  const col = i => FIELD_X + (i - 3) * TILE, row = j => PIVOT_Y + (j - 3) * TILE; // seam positions
+  const i0 = Math.max(0, Math.floor((bounds.x0 - FIELD_X) / TILE) + 3), i1 = Math.min(6, Math.ceil((bounds.x1 - FIELD_X) / TILE) + 3);
+  const j0 = Math.max(0, Math.floor((bounds.y0 - PIVOT_Y) / TILE) + 3), j1 = Math.min(6, Math.ceil((bounds.y1 - PIVOT_Y) / TILE) + 3);
+  const gx = [], gy = [], gz = [];
+  for (let i = i0; i <= i1; i++) { gx.push(col(i), col(i), null); gy.push(row(j0), row(j1), null); gz.push(0, 0, null); }
+  for (let j = j0; j <= j1; j++) { gx.push(col(i0), col(i1), null); gy.push(row(j), row(j), null); gz.push(0, 0, null); }
+  out.push({ type: "scatter3d", mode: "lines", x: gx, y: gy, z: gz, line: { color: gridColor, width: 2 },
+    showlegend: false, hoverinfo: "skip" });
+  const lx = [], ly = [], lt = [];
+  for (let i = i0; i < i1; i++) for (let j = j0; j < j1; j++) { lx.push(col(i) + TILE / 2); ly.push(row(j) + TILE / 2); lt.push("ABCDEF"[i] + (j + 1)); }
+  out.push({ type: "scatter3d", mode: "text", x: lx, y: ly, z: lx.map(() => 0.01), text: lt,
+    textfont: { color: frameColor, size: 11 }, showlegend: false, hoverinfo: "skip" });
+  const c5 = [[col(2), row(4)], [col(3), row(4)], [col(3), row(5)], [col(2), row(5)]];
+  out.push({ type: "mesh3d", x: c5.map(q => q[0]), y: c5.map(q => q[1]), z: [0, 0, 0, 0], i: [0, 0], j: [1, 2], k: [2, 3],
+    color: "#f2b705", opacity: 0.18, showlegend: false, hoverinfo: "skip" });
+  out.push({ type: "scatter3d", mode: "lines", x: [col(i0), col(i1)], y: [SEAM_Y, SEAM_Y], z: [0.002, 0.002],
+    line: { color: "#f2b705", width: 5 }, name: "Back = 0 (C4/C5 seam)", hoverinfo: "name" });
   return out;
 }
 
@@ -307,7 +342,9 @@ function render() {
     t3.push({ type: "scatter3d", mode: "lines", showlegend: false, legendgroup: "s" + r.i, hoverinfo: "skip",
       x: [r.sx, 0], y: [r.by, 0], z: [0, 0], line: { color: r.color, width: 2, dash: "dash" }, opacity: 0.5 });
   });
-  t3.push(...hiveTraces(p.yt, muted));
+  const bx = rows.map(r => r.sx).concat([FIELD_X - FRAME.w / 2, FIELD_X + FRAME.w / 2]);
+  const byy = rows.map(r => r.by).concat([PIVOT_Y - FRAME.d / 2, PIVOT_Y + FRAME.d / 2]);
+  t3.push(...hiveTraces(muted, grid, { x0: Math.min(...bx), x1: Math.max(...bx), y0: Math.min(...byy), y1: Math.max(...byy) }));
   t3.push({ type: "scatter3d", mode: "markers", name: "Goal", x: [0], y: [0], z: [p.yt],
     marker: { size: 4, color: "#ffd43b", symbol: "diamond" }, hovertemplate: `Goal (CELL opening)<br>height ${p.yt} m<extra></extra>` });
   const ax = title => ({ title, gridcolor: grid, zerolinecolor: grid, color: muted, backgroundcolor: "rgba(0,0,0,0)" });
@@ -350,7 +387,7 @@ function render() {
 }
 
 buildShotControls();
-["units", "theta", "g", "y0", "yt", "vunit", "wd", "eff"].forEach(id => $(id).addEventListener("input", render));
+["units", "theta", "g", "y0", "yt", "vunit", "wd", "eff", "flip"].forEach(id => $(id).addEventListener("input", render));
 $("autoAll").addEventListener("click", () => { override.fill(null); render(); });
 $("collapse").addEventListener("click", () => {
   const c = $("panel").classList.toggle("collapsed");
