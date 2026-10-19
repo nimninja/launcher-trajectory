@@ -68,6 +68,14 @@
   .btnrow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
   .btnrow select { width: auto; padding: 4px 6px; font-size: 13px; }
   #animBtn.playing { border-color: var(--accent); color: var(--accent); }
+  .heatbar { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .heatbar .grad { width: 90px; height: 8px; border-radius: 4px; flex: none;
+    background: linear-gradient(90deg, #c92a2a, #f08c00, #fcc419, #82c91e, #2f9e44); }
+  .row3 { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; color: var(--muted); }
+  .row3 input { width: 78px; padding: 2px 6px; font-size: 12px; }
+  .row3 select { width: auto; padding: 2px 4px; font-size: 12px; }
+  .row3 .ce { margin-left: auto; white-space: nowrap; }
+  #calbox b { color: var(--text); }
   .rm { padding: 0 6px; font-size: 12px; line-height: 18px; }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
   .hit { color: var(--good); } .miss { color: var(--bad); }
@@ -127,7 +135,7 @@
           <select id="ball"><option value="2.8" selected>POLLEN 2.8"</option><option value="3.6">NECTAR 3.6"</option></select>
         </div>
         <div><label class="f" for="wd">Wheel diameter (mm)</label><input id="wd" type="number" value="72" step="1" min="1"></div>
-        <div><label class="f" for="eff" title="Ball exit speed ÷ wheel surface speed. ~1 for two wheels, ~0.5 for one wheel against a hood.">Efficiency (0–1)</label><input id="eff" type="number" value="1" step="0.05" min="0.05" max="1"></div>
+        <div><label class="f" for="eff" title="Ball exit speed ÷ wheel surface speed. ~1 for two wheels, ~0.5 for one wheel against a hood. Use Calibrate below to measure it.">Efficiency</label><input id="eff" type="number" value="1" step="0.01" min="0.05"></div>
       </div>
       <label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-top:8px">
         <input id="flip" type="checkbox"> Flip left/right ("left" = toward column B)</label>
@@ -141,6 +149,11 @@
       <h3>Field map · click to add a shot <button id="clearAdded" type="button">Clear added</button></h3>
       <div id="pmap"></div>
       <div class="maphint" id="maphint">Click anywhere on the field to drop a launcher there.</div>
+      <label class="maphint" style="display:flex;gap:6px;align-items:center;margin-top:6px">
+        <input id="heatOn" type="checkbox" checked> Heatmap: how far off the speed can be and still go in</label>
+      <div class="heatbar" id="heatbar"><span class="grad"></span><span id="heatlegend"></span></div>
+      <h3>Calibrate efficiency <button id="calApply" type="button" disabled>Apply</button></h3>
+      <div class="maphint" id="calbox"></div>
       <h3>Launch speed v₀ per shot <button id="autoAll" type="button">All → auto</button></h3>
       <div id="shots"></div>
     </div>
@@ -159,7 +172,9 @@
       x is measured to the center of the red HIVE's upward CELL opening: back distance is from the C4/C5 tile seam (the opening center sits a few inches behind it, toward the HIVE), side distance is from the HIVE's center line.
       The HIVE, frame and tiles follow the FTC BIOBUZZ competition manual (Figures 9-5, 9-8 to 9-11): pivot 43.95" up, 30° tilt, two 12.04"-deep hexagonal CELLS 18.84" apart with 20"×14" openings, up-CELL opening 53.5"–65.6" above the tiles (center ≈ 1.51 m).
       "Model" steps the ball (POLLEN 2.8" or NECTAR 3.6") along its arc: ✓ goes in = it crosses the opening with the whole ball inside the hexagon;
-      ✗ hits wall = it touches a CELL wall, the other HIVE, or the frame first (red ✕ in 3D); • misses = neither. Click the floor in the 3D view or the field map to add a launcher; click a launcher dot in 3D to jump to its slider.</p>
+      ✗ hits wall = it touches a CELL wall, the other HIVE, or the frame first (red ✕ in 3D); • misses = neither. Window = how far the launch speed can be off (±) and still go in; the field-map heatmap shows it everywhere (red = tight or blocked, green = forgiving).
+      Calibrate: for shots you've tested, enter the RPM you ran and the result; each one bounds the efficiency and the app picks the value that fits all of them.
+      Click the floor in the 3D view or the field map to add a launcher; click a launcher dot in 3D to jump to its slider.</p>
   </div>
 </main>
 
@@ -179,12 +194,16 @@ const V_MIN = 0.5, V_MAX = 15;
 // Clicked points are stored in world meters ({ added: true, n, wx, wy }) so they stay put when units change.
 const shots = SHOTS.map(s => ({ ...s }));
 let addedCount = 0;
-try { (JSON.parse(localStorage.getItem("lt-added")) || []).forEach(a => shots.push({ added: true, n: ++addedCount, wx: a.wx, wy: a.wy })); } catch {}
+try { (JSON.parse(localStorage.getItem("lt-cal-data")) || []).forEach((c, i) => { if (shots[i] && c) shots[i].cal = c; }); } catch {}
+try { (JSON.parse(localStorage.getItem("lt-added")) || []).forEach(a => shots.push({ added: true, n: ++addedCount, wx: a.wx, wy: a.wy, cal: a.cal })); } catch {}
 const override = shots.map(() => null); // null = auto (hit the goal)
 let showData = true;
 try { showData = localStorage.getItem("lt-showData") !== "0"; } catch {}
 let anim = null; // { t0, speed, p, rows, idx } while the ball animation runs
-const saveAdded = () => { try { localStorage.setItem("lt-added", JSON.stringify(shots.filter(s => s.added).map(({ wx, wy }) => ({ wx, wy })))); } catch {} };
+const saveAdded = () => { try {
+  localStorage.setItem("lt-added", JSON.stringify(shots.filter(s => s.added).map(({ wx, wy, cal }) => ({ wx, wy, cal }))));
+  localStorage.setItem("lt-cal-data", JSON.stringify(shots.filter(s => !s.added).map(s => s.cal || null)));
+} catch {} };
 
 const $ = id => document.getElementById(id);
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -216,19 +235,21 @@ function requiredV0(x, p) {
   return denom > 0 ? Math.sqrt(p.g * x * x / denom) : NaN;
 }
 
+// World position of a shot. Side is measured from the red HIVE's center line;
+// facing the HIVE from C5, your left is toward column D (+X). Back is from the C4/C5 seam.
+function shotPos(s0, p) {
+  const lr = p.flip ? -1 : 1;
+  if (s0.added) {
+    const sx = s0.wx, by = s0.wy, side = Math.abs(sx) / p.k;
+    const dir = Math.abs(sx) < 1e-6 ? "middle" : sx * lr > 0 ? "left" : "right";
+    return { sx, by, s: { ...s0, back: +((by - SEAM_Y) / p.k).toFixed(1), side: +side.toFixed(1), dir, result: "clicked", pct: null } };
+  }
+  return { s: s0, sx: (s0.dir === "left" ? 1 : s0.dir === "right" ? -1 : 0) * lr * s0.side * p.k, by: SEAM_Y + s0.back * p.k };
+}
+
 function compute(p) {
   return shots.map((s0, i) => {
-    // Side is measured from the red HIVE's center line. Facing the HIVE from C5, your left is toward column D (+X).
-    const lr = p.flip ? -1 : 1;
-    let s = s0, sx, by;
-    if (s0.added) {
-      sx = s0.wx; by = s0.wy;
-      const side = Math.abs(sx) / p.k, dir = Math.abs(sx) < 1e-6 ? "middle" : sx * lr > 0 ? "left" : "right";
-      s = { ...s0, back: +((by - SEAM_Y) / p.k).toFixed(1), side: +side.toFixed(1), dir, result: "clicked", pct: null };
-    } else {
-      sx = (s.dir === "left" ? 1 : s.dir === "right" ? -1 : 0) * lr * s.side * p.k; // lateral (m)
-      by = SEAM_Y + s.back * p.k;                                                    // back is from the C4/C5 seam
-    }
+    const { s, sx, by } = shotPos(s0, p);
     const x = Math.hypot(sx, by);
     const theta = s.side ? Math.atan(s.back / s.side) * 180 / Math.PI : NaN;
     const vReq = requiredV0(x, p);
@@ -237,7 +258,7 @@ function compute(p) {
     const sim = simulate(sx, by, x, v, p);
     const label = s.added ? `Added ${s.n}` : `Shot ${i + 1}`;
     const color = s.added ? ADD_PALETTE[(s.n - 1) % ADD_PALETTE.length] : PALETTE[i % PALETTE.length];
-    return { ...s, i, label, sx, by, x, theta, vReq, v, auto, hAtGoal: height(x, v, p), sim, color };
+    return { ...s, i, label, sx, by, x, theta, vReq, v, auto, hAtGoal: height(x, v, p), sim, color, win: speedWindow(sx, by, p) };
   });
 }
 
@@ -257,10 +278,24 @@ function buildShotControls() {
         <input type="range" id="v${i}" min="${V_MIN}" max="${V_MAX}" step="0.01" aria-label="Shot ${i + 1} v0">
         <span class="val" id="vv${i}"></span>
       </div>
+      <div class="row3">
+        Tested at <input type="number" id="cr${i}" min="0" step="10" placeholder="RPM" value="${s.cal && s.cal.rpm ? s.cal.rpm : ""}">
+        <select id="co${i}">
+          <option value="">result…</option>
+          ${[["in", "went in"], ["short", "short"], ["long", "long / over"]].map(([v, t]) => `<option value="${v}"${s.cal && s.cal.out === v ? " selected" : ""}>${t}</option>`).join("")}
+        </select>
+        <span class="ce" id="ce${i}"></span>
+      </div>
     </div>`).join("");
   shots.forEach((s, i) => {
     $("v" + i).addEventListener("input", e => { override[i] = parseFloat(e.target.value); render(); });
     $("tag" + i).addEventListener("click", () => { if (override[i] !== null) { override[i] = null; render(); } });
+    const setCal = () => {
+      s.cal = { rpm: parseFloat($("cr" + i).value) || 0, out: $("co" + i).value };
+      saveAdded(); updateCal(params());
+    };
+    $("cr" + i).addEventListener("input", setCal);
+    $("co" + i).addEventListener("change", setCal);
     if (s.added) $("rm" + i).addEventListener("click", () => { shots.splice(i, 1); override.splice(i, 1); saveAdded(); buildShotControls(); render(); });
   });
 }
@@ -427,20 +462,21 @@ const STATUS = {
 };
 
 // Step along the arc and stop at the first event. Returns { status, what, at, path: [{ d, P }] }.
-function simulate(sx, by, x, v, p) {
-  const ux = x ? -sx / x : 0, uy = x ? -by / x : 0, r = p.ballR, dd = 0.004, maxD = Math.max(2 * x, 0.5);
+function simulate(sx, by, x, v, p, fast = false) {
+  // fast: coarser steps, no path, stop once well past the HIVE (used for speed windows / heatmap)
+  const ux = x ? -sx / x : 0, uy = x ? -by / x : 0, r = p.ballR, dd = fast ? 0.008 : 0.004, maxD = fast ? x + 0.6 : Math.max(2 * x, 0.5);
   const at = d => [sx + ux * d, by + uy * d, height(d, v, p)];
-  const path = [];
+  const path = fast ? null : [];
   let prev = null;
   for (let d = 0; d <= maxD; d += dd) {
     const P = at(d);
-    if (P[2] < 0) { path.push({ d, P: [P[0], P[1], 0] }); return { status: "miss", what: "lands on the floor", at: P, path }; }
+    if (P[2] < 0) { path && path.push({ d, P: [P[0], P[1], 0] }); return { status: "miss", what: "lands on the floor", at: P, path }; }
     if (prev) {
       const s0 = vdot(vsub(prev, OPEN.c), OPEN.n), s1 = vdot(vsub(P, OPEN.c), OPEN.n);
       if (s0 > 0 && s1 <= 0) {
         const t = s0 / (s0 - s1), Q = vadd(prev, vsub(P, prev), t), rel = vsub(Q, OPEN.c);
         if (insideOpening([vdot(rel, OPEN.e1), vdot(rel, OPEN.e2)], r)) {
-          path.push({ d: d - dd + t * dd, P: Q });
+          path && path.push({ d: d - dd + t * dd, P: Q });
           return { status: "in", what: "enters the CELL opening cleanly", at: Q, path };
         }
       }
@@ -448,11 +484,11 @@ function simulate(sx, by, x, v, p) {
     for (const col of COLLIDERS) {
       if (P[0] < col.lo[0] - r || P[0] > col.hi[0] + r || P[1] < col.lo[1] - r || P[1] > col.hi[1] + r || P[2] < col.lo[2] - r || P[2] > col.hi[2] + r) continue;
       for (const [A, B, C] of col.tris)
-        if (dist2(P, closestOnTri(P, A, B, C)) < r * r) { path.push({ d, P }); return { status: "wall", what: "hits " + col.name, at: P, path }; }
+        if (dist2(P, closestOnTri(P, A, B, C)) < r * r) { path && path.push({ d, P }); return { status: "wall", what: "hits " + col.name, at: P, path }; }
     }
     for (const [A, B] of FRAME_SEGS)
-      if (segDist2(P, A, B) < (r + FRAME_R) ** 2) { path.push({ d, P }); return { status: "wall", what: "hits the HIVE frame", at: P, path }; }
-    path.push({ d, P });
+      if (segDist2(P, A, B) < (r + FRAME_R) ** 2) { path && path.push({ d, P }); return { status: "wall", what: "hits the HIVE frame", at: P, path }; }
+    path && path.push({ d, P });
     prev = P;
   }
   return { status: "miss", what: "flies past", at: prev, path };
@@ -508,6 +544,125 @@ function stopAnim() {
   anim = null;
   $("animBtn").textContent = "▶ Animate ball"; $("animBtn").classList.remove("playing");
   render();
+}
+
+// Range of launch speeds (m/s) around the aimed speed that still go in cleanly. vlo = vhi = 0 → nothing goes in.
+const WIN_CACHE = new Map();
+const physKey = p => [p.t, p.g, p.y0, p.yt, p.ballR].join();
+function speedWindow(sx, by, p) {
+  const key = physKey(p) + "|" + sx.toFixed(4) + "," + by.toFixed(4);
+  if (WIN_CACHE.has(key)) return WIN_CACHE.get(key);
+  const x = Math.hypot(sx, by), v0 = requiredV0(x, p);
+  let res;
+  if (!isFinite(v0)) res = { vReq: NaN, vlo: NaN, vhi: NaN };
+  else {
+    const isIn = v => simulate(sx, by, x, v, p, true).status === "in";
+    const K = [];
+    for (let i = 0; i <= 12; i++) { const k = 0.85 + 0.025 * i; K.push([k, isIn(v0 * k)]); }
+    let c = -1, best = 1e9;
+    K.forEach(([k, ok], i) => { if (ok && Math.abs(k - 1) < best) { best = Math.abs(k - 1); c = i; } });
+    if (c < 0) res = { vReq: v0, vlo: 0, vhi: 0 };
+    else {
+      let a = c, b = c;
+      while (a > 0 && K[a - 1][1]) a--;
+      while (b < K.length - 1 && K[b + 1][1]) b++;
+      const edge = (out, inn) => { for (let n = 0; n < 4; n++) { const m = (out + inn) / 2; if (isIn(v0 * m)) inn = m; else out = m; } return inn; };
+      const lo = a > 0 ? edge(K[a - 1][0], K[a][0]) : K[a][0], hi = b < K.length - 1 ? edge(K[b + 1][0], K[b][0]) : K[b][0];
+      res = { vReq: v0, vlo: v0 * lo, vhi: v0 * hi };
+    }
+  }
+  if (WIN_CACHE.size > 5000) WIN_CACHE.clear();
+  WIN_CACHE.set(key, res);
+  return res;
+}
+// Half-width of a window in the current speed unit, e.g. "±42 RPM".
+const fmtHalf = w => !isFinite(w.vlo) ? "unreachable" : w.vhi <= 0 ? "nothing goes in"
+  : "±" + (showRPM() ? Math.round((toRPM(w.vhi) - toRPM(w.vlo)) / 2) + " RPM" : ((w.vhi - w.vlo) / 2).toFixed(2) + " m/s");
+
+// ---- Calibration: each tested shot says what efficiency could be ----
+// ball speed = eff · π · D · RPM / 60, so a shot run at RPM that went in means eff·πD·RPM/60 ∈ [vlo, vhi];
+// "short" means it was below vlo, "long" means above vhi. Intersect all of them.
+let calEstimate = null;
+function updateCal(p) {
+  const D = parseFloat($("wd").value) / 1000, kOf = rpm => 60 / (Math.PI * D * rpm);
+  let lo = 0, hi = Infinity, n = 0, skipped = 0;
+  const mids = [];
+  shots.forEach((s0, i) => {
+    const c = s0.cal, el = $("ce" + i);
+    if (el) el.textContent = "";
+    if (!c || !(c.rpm > 0) || !c.out || !(s0.added || showData)) return;
+    const { sx, by } = shotPos(s0, p), w = speedWindow(sx, by, p), k = kOf(c.rpm);
+    if (!(w.vhi > 0)) { skipped++; if (el) el.textContent = "can't go in here"; return; }
+    n++;
+    const a = k * w.vlo, b = k * w.vhi;
+    if (c.out === "in") { lo = Math.max(lo, a); hi = Math.min(hi, b); mids.push((a + b) / 2); if (el) el.textContent = `eff ${a.toFixed(2)}–${b.toFixed(2)}`; }
+    if (c.out === "short") { hi = Math.min(hi, a); if (el) el.textContent = `eff < ${a.toFixed(2)}`; }
+    if (c.out === "long") { lo = Math.max(lo, b); if (el) el.textContent = `eff > ${b.toFixed(2)}`; }
+  });
+  calEstimate = null;
+  let msg;
+  if (!n) msg = "Enter the RPM you actually ran for one or more shots below (\"Tested at\") and whether it went in, fell short, or went long. Shots that went in count most.";
+  else if (lo < hi && isFinite(hi)) {
+    calEstimate = (lo + hi) / 2;
+    msg = `<b>Efficiency ≈ ${calEstimate.toFixed(3)}</b> from ${n} test${n > 1 ? "s" : ""} (anything ${lo.toFixed(2)}–${hi.toFixed(2)} fits all of them).`;
+  } else if (lo < hi) msg = `So far only "long" results: efficiency is above ${lo.toFixed(2)}. Add a shot that went in or fell short.`;
+  else if (mids.length) {
+    mids.sort((x, y) => x - y);
+    calEstimate = mids[Math.floor(mids.length / 2)];
+    msg = `Results disagree (no single efficiency explains all ${n}); using the median of the shots that went in: <b>${calEstimate.toFixed(3)}</b>.`;
+  } else msg = `Results disagree and none went in; add a shot that went in.`;
+  if (skipped) msg += ` ${skipped} tested shot${skipped > 1 ? "s" : ""} can't go in from where ${skipped > 1 ? "they are" : "it is"} and ${skipped > 1 ? "were" : "was"} ignored.`;
+  $("calbox").innerHTML = msg;
+  $("calApply").disabled = calEstimate === null;
+}
+
+// ---- Heatmap: speed window on a 4" grid over the field, computed in the background ----
+const HEAT_STEP = 4 * IN;
+const HEAT = { key: "", xs: [], ys: [], lo: null, hi: null, next: 0, timer: 0, total: 0 };
+for (let k = 0; k < 36; k++) { HEAT.xs.push(FIELD_X - 3 * TILE + HEAT_STEP * (k + 0.5)); HEAT.ys.push(PIVOT_Y - 3 * TILE + HEAT_STEP * (k + 0.5)); }
+function ensureHeat(p) {
+  if (!$("heatOn").checked) return;
+  const key = physKey(p);
+  if (key === HEAT.key) return;
+  HEAT.key = key; HEAT.p = p; HEAT.next = 0;
+  HEAT.total = HEAT.xs.length * HEAT.ys.length;
+  HEAT.lo = new Float64Array(HEAT.total).fill(NaN); HEAT.hi = new Float64Array(HEAT.total).fill(NaN);
+  clearTimeout(HEAT.timer);
+  HEAT.timer = setTimeout(heatChunk, 120);
+}
+function heatChunk() {
+  const t0 = performance.now(), nx = HEAT.xs.length, ny = HEAT.ys.length;
+  while (HEAT.next < HEAT.total && performance.now() - t0 < 25) {
+    const k = HEAT.next++, jy = ny - 1 - Math.floor(k / nx), ix = k % nx; // start from row 6 (the shooting side)
+    const w = speedWindow(HEAT.xs[ix], HEAT.ys[jy], HEAT.p);
+    HEAT.lo[jy * nx + ix] = w.vlo; HEAT.hi[jy * nx + ix] = w.vhi;
+  }
+  updateHeatTrace();
+  if (HEAT.next < HEAT.total) HEAT.timer = setTimeout(heatChunk, 0);
+}
+function heatZ() {
+  const nx = HEAT.xs.length, Z = [];
+  let max = 0;
+  for (let j = 0; j < HEAT.ys.length; j++) {
+    const row = [];
+    for (let i = 0; i < nx; i++) {
+      const lo = HEAT.lo ? HEAT.lo[j * nx + i] : NaN, hi = HEAT.hi ? HEAT.hi[j * nx + i] : NaN;
+      const z = !isFinite(lo) ? null : hi <= 0 ? 0 : showRPM() ? (toRPM(hi) - toRPM(lo)) / 2 : (hi - lo) / 2;
+      if (z > max) max = z;
+      row.push(z);
+    }
+    Z.push(row);
+  }
+  return { Z, max };
+}
+function updateHeatTrace() {
+  const gd = $("pmap");
+  if (!gd.data || !gd.data[0] || gd.data[0].type !== "heatmap") return;
+  const { Z, max } = heatZ(), on = $("heatOn").checked;
+  Plotly.restyle(gd, { z: [Z], zmax: [Math.max(max, 1e-6)], visible: [on] }, [0]);
+  const pct = HEAT.total ? Math.round(100 * HEAT.next / HEAT.total) : 0;
+  $("heatbar").style.display = on ? "flex" : "none";
+  $("heatlegend").textContent = `0 → ±${showRPM() ? Math.round(max) + " RPM" : max.toFixed(2) + " m/s"}; blank = can't reach at this angle` + (pct < 100 ? ` · computing ${pct}%` : "");
 }
 
 function render() {
@@ -584,7 +739,10 @@ function render() {
   }, { responsive: true, displaylogo: false });
 
   // ---- top-down field map (click to add) ----
+  ensureHeat(p);
   renderMap(rows, muted, grid, font);
+  updateHeatTrace();
+  updateCal(p);
 
   // ---- 2D side view ----
   const t2 = rows.map(r => ({
@@ -604,13 +762,13 @@ function render() {
   // ---- table ----
   const tol = 0.05; // m
   $("tbl").innerHTML = `<tr><th class="l">Shot</th><th>Back</th><th>Side</th><th class="l">Dir</th><th class="l">Result</th>
-    <th>x (m)</th><th>θ (°)</th><th>From goal (°)</th><th>Auto v₀ (${vLabel()})</th><th>Used v₀ (${vLabel()})</th><th class="l">Model</th><th>Height at goal (m)</th></tr>` +
+    <th>x (m)</th><th>θ (°)</th><th>From goal (°)</th><th>Auto v₀ (${vLabel()})</th><th>Used v₀ (${vLabel()})</th><th class="l">Model</th><th>Window (${vLabel()})</th><th>Height at goal (m)</th></tr>` +
     rows.map(r => {
       const dh = r.hAtGoal - p.yt;
       return `<tr><td><span class="dot" style="background:${r.color};margin-right:6px"></span>${r.label}</td>
         <td>${r.back}</td><td>${r.side}</td><td class="l">${r.dir}</td><td class="l">${r.added ? "—" : `${r.result} ${r.pct}%`}</td>
         <td>${fmt(r.x)}</td><td>${fmt(r.theta, 1)}</td><td>${fmt(90 - r.theta, 1)}</td>
-        <td>${isFinite(r.vReq) ? fmtVn(r.vReq) : "unreachable"}</td><td>${fmtVn(r.v)}</td><td class="l st ${r.sim.status}" title="${r.sim.what}">${STATUS[r.sim.status].short}</td>
+        <td>${isFinite(r.vReq) ? fmtVn(r.vReq) : "unreachable"}</td><td>${fmtVn(r.v)}</td><td class="l st ${r.sim.status}" title="${r.sim.what}">${STATUS[r.sim.status].short}</td><td>${fmtHalf(r.win).replace(/ (RPM|m\/s)$/, "")}</td>
         <td class="${Math.abs(dh) <= tol ? "hit" : "miss"}">${fmt(r.hAtGoal)} (${dh >= 0 ? "+" : ""}${fmt(dh)})</td></tr>`;
     }).join("");
 }
@@ -634,7 +792,11 @@ function renderMap(rows, muted, grid, font) {
   shapes.push({ type: "line", x0: col(0), x1: col(6), y0: SEAM_Y, y1: SEAM_Y, line: { color: "#f2b705", width: 2 } });
   const lx = [], ly = [], lt = [];
   for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) { lx.push(col(i) + TILE / 2); ly.push(row(j) + TILE / 2); lt.push("ABCDEF"[i] + (j + 1)); }
+  const { Z, max } = heatZ();
   const traces = [
+    { type: "heatmap", x: HEAT.xs, y: HEAT.ys, z: Z, zmin: 0, zmax: Math.max(max, 1e-6), showscale: false, opacity: 0.75,
+      colorscale: [[0, "#c92a2a"], [0.25, "#f08c00"], [0.5, "#fcc419"], [0.75, "#82c91e"], [1, "#2f9e44"]],
+      hoverinfo: "skip", visible: $("heatOn").checked },
     { type: "scatter", mode: "text", x: lx, y: ly, text: lt, textfont: { color: muted, size: 9 }, hoverinfo: "skip" },
     ...rows.map(r => ({ type: "scatter", mode: "lines", x: [r.sx, 0], y: [r.by, 0], line: { color: r.color, width: 1, dash: "dot" }, hoverinfo: "skip" })),
     { type: "scatter", mode: "markers", x: rows.map(r => r.sx), y: rows.map(r => r.by),
@@ -673,7 +835,8 @@ function describePoint(wx, wy) {
   const p = params(), x = Math.hypot(wx, wy), v = requiredV0(x, p);
   const side = Math.abs(wx) / p.k, dir = side < 1e-6 ? "" : wx * (p.flip ? -1 : 1) > 0 ? " left" : " right";
   const out = isFinite(v) ? STATUS[simulate(wx, wy, x, v, p).status].short : "";
-  return `${((wy - SEAM_Y) / p.k).toFixed(1)} back · ${side.toFixed(1)}${dir} (${$("units").selectedOptions[0].text}) → ${isFinite(v) ? fmtV(v) : "unreachable"} ${out}`;
+  const w = isFinite(v) ? speedWindow(wx, wy, p) : null;
+  return `${((wy - SEAM_Y) / p.k).toFixed(1)} back · ${side.toFixed(1)}${dir} (${$("units").selectedOptions[0].text}) → ${isFinite(v) ? fmtV(v) : "unreachable"} ${out}${w && w.vhi > 0 ? " · window " + fmtHalf(w) : ""}`;
 }
 function hook3d() {
   // Plotly's 3D click event is unreliable, so remember what's under the cursor (from hover)
@@ -719,22 +882,20 @@ const mapPoint = e => {
 };
 $("pmap").addEventListener("click", e => { const q = mapPoint(e); if (q) addShot(q[0], q[1]); });
 $("pmap").addEventListener("mousemove", e => {
-  const q = mapPoint(e), p = params();
-  if (!q) { $("maphint").textContent = "Click anywhere on the field to drop a launcher there."; return; }
-  const u = $("units").selectedOptions[0].text, x = Math.hypot(q[0], q[1]), v = requiredV0(x, p);
-  const side = Math.abs(q[0]) / p.k, dir = side < 1e-6 ? "" : q[0] * (p.flip ? -1 : 1) > 0 ? " left" : " right";
-  const out = isFinite(v) ? STATUS[simulate(q[0], q[1], x, v, p).status].short : "";
-  $("maphint").textContent = `${((q[1] - SEAM_Y) / p.k).toFixed(1)} back · ${side.toFixed(1)}${dir} (${u}) → ${isFinite(v) ? fmtV(v) : "unreachable"} ${out}`;
+  const q = mapPoint(e);
+  $("maphint").textContent = q ? describePoint(q[0], q[1]) : "Click anywhere on the field to drop a launcher there.";
 });
+
 $("clearAdded").addEventListener("click", () => {
   for (let i = shots.length - 1; i >= 0; i--) if (shots[i].added) { shots.splice(i, 1); override.splice(i, 1); }
   addedCount = 0; saveAdded(); buildShotControls(); render();
 });
 
 buildShotControls();
-["units", "theta", "g", "y0", "yt", "vunit", "wd", "eff", "flip", "ball"].forEach(id => $(id).addEventListener("input", render));
+["units", "theta", "g", "y0", "yt", "vunit", "wd", "eff", "flip", "ball", "heatOn"].forEach(id => $(id).addEventListener("input", render));
 $("autoAll").addEventListener("click", () => { override.fill(null); render(); });
 $("animBtn").addEventListener("click", startAnim);
+$("calApply").addEventListener("click", () => { if (calEstimate !== null) { $("eff").value = calEstimate.toFixed(3); render(); } });
 $("toggleData").addEventListener("click", () => {
   showData = !showData;
   try { localStorage.setItem("lt-showData", showData ? "1" : "0"); } catch {}
